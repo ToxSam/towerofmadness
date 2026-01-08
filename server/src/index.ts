@@ -195,17 +195,9 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
   console.log(`📍 State: ${info.isBreak ? 'BREAK' : 'ACTIVE'} (${info.remainingTime}s remaining)`)
   console.log('')
   
-  // Create persistent room at startup so timer runs
-  setTimeout(async () => {
-    try {
-      console.log('🔧 Creating persistent game room...')
-      const reservation = await matchMaker.createRoom('tower_room', {})
-      console.log(`🎮 Room created: ${reservation.room.roomId}`)
-      console.log('⏱️ Timer running independently of players!')
-    } catch (error: any) {
-      console.error('❌ Failed to create room:', error?.message || error)
-    }
-  }, 1000)
+  // Note: Room will be created automatically when first player joins via matchmaking
+  // The timer will start running once the room is created
+  // Since autoDispose = false, the room will persist and timer will continue
   
   console.log('🌍 All players worldwide sync to UTC clock!')
   console.log('🎯 Server ready! Waiting for players...')
