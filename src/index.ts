@@ -1,5 +1,5 @@
 import {} from '@dcl/sdk/math'
-import { engine, Transform, TriggerArea, triggerAreaEventsSystem, ColliderLayer, PointerEvents, PointerEventType, InputAction, pointerEventsSystem } from '@dcl/sdk/ecs'
+import { engine, Transform, TriggerArea, triggerAreaEventsSystem, ColliderLayer, PointerEvents, PointerEventType, InputAction, pointerEventsSystem, AudioSource, Entity } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
 import { EntityNames } from '../assets/scene/entity-names'
 import { setupUi } from './ui'
@@ -441,6 +441,106 @@ export function main() {
   console.log('[Tower Generator] Generating initial tower...')
   generateTower()
   
+  // Setup background music - plays automatically when players enter
+  setupBackgroundMusic('sounds/PixelSodaBar.mp3')
+  
   console.log('[DEBUG] ========== main() setup complete ==========')
   console.log('[DEBUG] Initial gameState:', gameState)
+}
+
+// Store music entity globally so we can control it
+let backgroundMusicEntity: Entity | null = null
+let audioStarted = false
+
+/**
+ * Setup background music
+ * Plays automatically when players enter the scene
+ * SDK7 supports MP3, OGG, and WAV formats
+ * 
+ * Note: Some browsers block autoplay. Audio will start after first user interaction.
+ */
+function setupBackgroundMusic(audioPath: string) {
+  // Create entity for background music
+  backgroundMusicEntity = engine.addEntity()
+  
+  // Position audio at scene center for global sound
+  // Audio will be audible throughout the scene
+  Transform.create(backgroundMusicEntity, {
+    position: Vector3.create(40, 0, 40), // Center of tower area
+    scale: Vector3.One()
+  })
+  
+  // Create audio source with looping enabled
+  // SDK7 AudioSource supports: MP3, OGG, WAV formats
+  AudioSource.create(backgroundMusicEntity, {
+    audioClipUrl: audioPath,
+    playing: true,   // Try to start playing immediately
+    loop: true,      // Loop continuously
+    volume: 1.0      // Volume level (0.0 to 1.0) - adjust as needed
+  })
+  
+  console.log(`[Audio] Background music loaded: ${audioPath}`)
+  console.log(`[Audio] Attempting to start playback...`)
+  
+  // System to ensure audio keeps playing (handles autoplay restrictions)
+  engine.addSystem(() => {
+    if (backgroundMusicEntity && AudioSource.has(backgroundMusicEntity)) {
+      const audio = AudioSource.get(backgroundMusicEntity)
+      
+      // If audio stopped (due to autoplay restrictions), try to restart it
+      if (!audio.playing && !audioStarted) {
+        // Try to restart - this will work after user interaction
+        const audioMutable = AudioSource.getMutable(backgroundMusicEntity)
+        audioMutable.playing = true
+      } else if (audio.playing && !audioStarted) {
+        // Audio is playing successfully
+        audioStarted = true
+        console.log(`[Audio] ✓ Background music is now playing!`)
+      }
+    }
+  })
+  
+  // Also try to start audio on any pointer event (user interaction)
+  // This helps bypass browser autoplay restrictions
+  pointerEventsSystem.onPointerDown(
+    {
+      entity: engine.RootEntity,
+      opts: {
+        button: InputAction.IA_POINTER,
+        hoverText: '',
+        showFeedback: false,
+        maxDistance: 1000
+      }
+    },
+    () => {
+      if (backgroundMusicEntity && AudioSource.has(backgroundMusicEntity)) {
+        const audio = AudioSource.getMutable(backgroundMusicEntity)
+        if (!audio.playing) {
+          audio.playing = true
+          console.log(`[Audio] Background music started via user interaction`)
+        }
+      }
+    }
+  )
+  
+  return backgroundMusicEntity
+}
+
+/**
+ * Play a sound effect once (non-looping)
+ * Example: playSoundEffect('sounds/jump.mp3', 0.8)
+ * Note: Entity cleanup should be handled by the caller or via a system
+ */
+export function playSoundEffect(audioPath: string, volume: number = 1.0) {
+  const soundEntity = engine.addEntity()
+  
+  AudioSource.create(soundEntity, {
+    audioClipUrl: audioPath,
+    playing: true,
+    loop: false,
+    volume: volume
+  })
+  
+  // Return entity so caller can manage cleanup if needed
+  return soundEntity
 }
