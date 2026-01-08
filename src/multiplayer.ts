@@ -1,22 +1,32 @@
 /**
- * Tower of Madness - Multiplayer System (Colyseus Client)
+ * Tower of Madness - Multiplayer System (Clock-Based Sync)
  * 
- * Connects to Colyseus server for:
- * - Synchronized tower generation
- * - Shared timer with speed multiplier
- * - Leaderboard updates
- * - Round lifecycle management
- * 
- * Server URL Configuration:
- * - Development: ws://localhost:2567
- * - Production: wss://your-railway-url.up.railway.app
+ * Uses REAL-WORLD TIME for round synchronization:
+ * - Rounds are 7 minutes, synced to UTC clock
+ * - All players worldwide are in the same round
+ * - Tower generated deterministically from round number
+ * - Works even without server connection (fallback)
  */
 
 // @ts-ignore - colyseus.js types may not be available at compile time
 import * as Colyseus from 'colyseus.js'
 
-// Declare global window for URL parameter parsing (may not exist in all environments)
+// Declare globals that may not exist in all environments
 declare const window: { location?: { search: string } } | undefined
+declare function setInterval(callback: () => void, ms: number): number
+declare function clearInterval(handle: number): void
+
+// ============================================
+// CONSTANTS (Must match server!)
+// ============================================
+
+const ROUND_DURATION = 420 // 7 minutes in seconds
+const BREAK_DURATION = 10  // 10 seconds break
+const TOTAL_CYCLE = ROUND_DURATION + BREAK_DURATION // 430 seconds
+
+const CHUNK_OPTIONS = ['Chunk01', 'Chunk02', 'Chunk03']
+const MIN_CHUNKS = 3
+const MAX_CHUNKS = 8
 
 // ============================================
 // TYPE DEFINITIONS
@@ -39,43 +49,104 @@ export type WinnerEntry = {
   rank: number
 }
 
+export interface RoundInfo {
+  roundNumber: number
+  isBreak: boolean
+  remainingTime: number
+  chunkIds: string[]
+}
+
+// ============================================
+// SEEDED RANDOM (Same as server!)
+// ============================================
+
+class SeededRandom {
+  private seed: number
+  
+  constructor(seed: number) {
+    this.seed = seed
+  }
+  
+  next(): number {
+    this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff
+    return this.seed / 0x7fffffff
+  }
+  
+  nextInt(min: number, max: number): number {
+    return Math.floor(this.next() * (max - min + 1)) + min
+  }
+}
+
+// ============================================
+// CLOCK-BASED ROUND CALCULATION
+// ============================================
+
+/**
+ * Calculate current round info from wall clock
+ * This runs locally - no server needed!
+ */
+export function getCurrentRoundInfo(): RoundInfo {
+  const now = Math.floor(Date.now() / 1000)
+  const roundNumber = Math.floor(now / TOTAL_CYCLE)
+  const cycleProgress = now % TOTAL_CYCLE
+  
+  const isBreak = cycleProgress >= ROUND_DURATION
+  const remainingTime = isBreak 
+    ? TOTAL_CYCLE - cycleProgress 
+    : ROUND_DURATION - cycleProgress
+  
+  // Generate tower deterministically
+  const chunkIds = generateTowerForRound(roundNumber)
+  
+  return {
+    roundNumber,
+    isBreak,
+    remainingTime,
+    chunkIds
+  }
+}
+
+/**
+ * Generate tower chunks from round number (same as server!)
+ */
+function generateTowerForRound(roundNumber: number): string[] {
+  const rng = new SeededRandom(roundNumber)
+  const numChunks = rng.nextInt(MIN_CHUNKS, MAX_CHUNKS)
+  
+  const chunks: string[] = []
+  for (let i = 0; i < numChunks; i++) {
+    const chunkIndex = rng.nextInt(0, CHUNK_OPTIONS.length - 1)
+    chunks.push(CHUNK_OPTIONS[chunkIndex])
+  }
+  
+  return chunks
+}
+
 // ============================================
 // CONFIGURATION
 // ============================================
 
-// Server URL - Change this for production!
-// Development: ws://localhost:2567
-// Production: wss://your-app.up.railway.app
 const DEFAULT_SERVER_URL = 'ws://localhost:2567'
 
 function getServerUrl(): string {
-  // In browser/Decentraland, we can check URL params or use default
-  // For production, you'll want to hardcode your Railway URL here
-  
-  // Try to get from URL params (for testing)
   try {
     if (typeof window !== 'undefined' && window && window.location) {
-      // Use globalThis.URLSearchParams if available
       const URLSearchParamsClass = (globalThis as any).URLSearchParams
       if (URLSearchParamsClass) {
         const params = new URLSearchParamsClass(window.location.search)
         const serverUrl = params.get('server')
         if (serverUrl) {
-          console.log(`[Multiplayer] Using server from URL param: ${serverUrl}`)
+          console.log(`[Multiplayer] Using server from URL: ${serverUrl}`)
           return serverUrl
         }
       }
     }
   } catch (e) {
-    // Ignore - not in browser
+    // Ignore
   }
   
-  // === PRODUCTION URL ===
-  // Your Railway server
+  // Production URL
   return 'wss://towerofmadness-production.up.railway.app'
-  
-  // For local testing, comment above and use:
-  // return DEFAULT_SERVER_URL
 }
 
 // ============================================
@@ -86,89 +157,110 @@ let client: Colyseus.Client | null = null
 let room: Colyseus.Room | null = null
 let multiplayerInitialized = false
 let connectionFailed = false
+let currentRoundNumber = -1
 
-// Callbacks (set by index.ts)
+// Callbacks
 let onServerTowerReadyCallback: ((chunks: string[]) => void) | null = null
 let onTimerUpdateCallback: ((remaining: number, multiplier: number) => void) | null = null
 let onLeaderboardUpdateCallback: ((players: LeaderboardEntry[]) => void) | null = null
 let onGameEndedCallback: ((winners: WinnerEntry[]) => void) | null = null
+let onRoundChangedCallback: ((roundInfo: RoundInfo) => void) | null = null
+
+// ============================================
+// LOCAL CLOCK SYNC (Works without server!)
+// ============================================
+
+let localClockInterval: number | null = null
+
+/**
+ * Start local clock-based updates
+ * This ensures game works even if server is down
+ */
+function startLocalClockSync() {
+  if (localClockInterval) return
+  
+  console.log('[Multiplayer] ⏰ Starting local clock sync')
+  
+  localClockInterval = setInterval(() => {
+    const info = getCurrentRoundInfo()
+    
+    // Detect round change
+    if (info.roundNumber !== currentRoundNumber) {
+      currentRoundNumber = info.roundNumber
+      console.log(`[Multiplayer] 🎮 Round #${info.roundNumber} (clock-based)`)
+      console.log(`[Multiplayer] 🗼 Tower: [${info.chunkIds.join(' → ')}]`)
+      
+      if (onRoundChangedCallback) {
+        onRoundChangedCallback(info)
+      }
+      if (onServerTowerReadyCallback) {
+        onServerTowerReadyCallback(info.chunkIds)
+      }
+    }
+    
+    // Update timer
+    if (onTimerUpdateCallback) {
+      // Get speed multiplier from server if connected
+      const multiplier = room ? (room.state as any)?.speedMultiplier || 1 : 1
+      onTimerUpdateCallback(info.remainingTime, multiplier)
+    }
+  }, 1000)
+}
+
+function stopLocalClockSync() {
+  if (localClockInterval) {
+    clearInterval(localClockInterval)
+    localClockInterval = null
+  }
+}
 
 // ============================================
 // INITIALIZATION
 // ============================================
 
-/**
- * Initialize multiplayer connection to Colyseus server
- * Returns true if connected, false if failed
- */
 export async function initMultiplayer(): Promise<boolean> {
   if (multiplayerInitialized) {
     return room !== null
   }
   
   multiplayerInitialized = true
+  
+  // Always start local clock sync first (works offline!)
+  startLocalClockSync()
+  
   const serverUrl = getServerUrl()
   
   console.log('[Multiplayer] ═══════════════════════════════════')
-  console.log('[Multiplayer] 🔌 Connecting to Colyseus server...')
+  console.log('[Multiplayer] 🔌 Connecting to server...')
   console.log(`[Multiplayer] URL: ${serverUrl}`)
   console.log('[Multiplayer] ═══════════════════════════════════')
   
   try {
-    // Create Colyseus client
     client = new Colyseus.Client(serverUrl)
-    
-    // Join or create the tower room
     room = await client.joinOrCreate('tower_room', {
-      displayName: 'Player', // Will be updated later
+      displayName: 'Player',
     })
     
     console.log('[Multiplayer] ✅ Connected!')
-    console.log(`[Multiplayer] Session ID: ${room.sessionId}`)
-    console.log(`[Multiplayer] Room ID: ${room.roomId}`)
+    console.log(`[Multiplayer] Session: ${room.sessionId}`)
+    console.log(`[Multiplayer] Room: ${room.roomId}`)
     
-    // Set up state change listeners
     setupStateListeners()
-    
     return true
   } catch (error) {
     connectionFailed = true
     console.error('[Multiplayer] ❌ Connection failed:', error)
-    console.log('[Multiplayer] Falling back to SINGLE-PLAYER mode')
+    console.log('[Multiplayer] ⏰ Using local clock sync (offline mode)')
     return false
   }
 }
 
-/**
- * Set up listeners for Colyseus state changes
- */
 function setupStateListeners() {
   if (!room) return
   
-  // Track previous chunk IDs to detect tower changes
-  let previousChunkIds: string[] = []
-  
-  // Main state change listener
+  // State changes from server (for leaderboard, etc.)
   room.onStateChange((state: any) => {
-    // Check if tower changed (new round)
-    const currentChunkIds = Array.from(state.chunkIds || []) as string[]
-    const chunksChanged = JSON.stringify(currentChunkIds) !== JSON.stringify(previousChunkIds)
-    
-    if (chunksChanged && currentChunkIds.length > 0) {
-      previousChunkIds = currentChunkIds
-      console.log(`[Multiplayer] 🗼 New tower received: [${currentChunkIds.join(' → ')}]`)
-      
-      if (onServerTowerReadyCallback) {
-        onServerTowerReadyCallback(currentChunkIds)
-      }
-    }
-    
-    // Update timer
-    if (onTimerUpdateCallback) {
-      onTimerUpdateCallback(state.remainingTime || 0, state.speedMultiplier || 1)
-    }
-    
-    // Update leaderboard
+    // Leaderboard updates
     if (onLeaderboardUpdateCallback && state.players) {
       const players: LeaderboardEntry[] = []
       state.players.forEach((player: any) => {
@@ -182,11 +274,8 @@ function setupStateListeners() {
         })
       })
       
-      // Sort by finish order (if finished) or height
       players.sort((a, b) => {
-        if (a.isFinished && b.isFinished) {
-          return a.finishOrder - b.finishOrder
-        }
+        if (a.isFinished && b.isFinished) return a.finishOrder - b.finishOrder
         if (a.isFinished) return -1
         if (b.isFinished) return 1
         return b.maxHeight - a.maxHeight
@@ -196,7 +285,7 @@ function setupStateListeners() {
     }
   })
   
-  // Listen for round ended message
+  // Round ended
   room.onMessage('roundEnded', (data: { winners: WinnerEntry[] }) => {
     console.log('[Multiplayer] 🏁 Round ended!')
     if (onGameEndedCallback) {
@@ -204,36 +293,20 @@ function setupStateListeners() {
     }
   })
   
-  // Listen for new round message
-  room.onMessage('newRound', (data: { roundId: string; chunkIds: string[] }) => {
-    console.log(`[Multiplayer] 🎮 New round: ${data.roundId}`)
-    console.log(`[Multiplayer] Tower: [${data.chunkIds.join(' → ')}]`)
-    
-    if (onServerTowerReadyCallback) {
-      onServerTowerReadyCallback(data.chunkIds)
-    }
-  })
-  
-  // Listen for player finished
+  // Player finished
   room.onMessage('playerFinished', (data: any) => {
-    console.log(`[Multiplayer] 🏆 ${data.displayName} finished! (${data.finishOrder}${getOrdinalSuffix(data.finishOrder)}) - Timer x${data.speedMultiplier}`)
+    console.log(`[Multiplayer] 🏆 ${data.displayName} finished! (x${data.speedMultiplier})`)
   })
   
-  // Connection error handling
+  // Connection handlers
   room.onError((code: number, message?: string) => {
-    console.error(`[Multiplayer] ❌ Room error (${code}): ${message}`)
+    console.error(`[Multiplayer] ❌ Error (${code}): ${message}`)
   })
   
   room.onLeave((code: number) => {
-    console.log(`[Multiplayer] 👋 Left room (code: ${code})`)
+    console.log(`[Multiplayer] 👋 Left room (${code})`)
     room = null
   })
-}
-
-function getOrdinalSuffix(n: number): string {
-  const s = ['th', 'st', 'nd', 'rd']
-  const v = n % 100
-  return s[(v - 20) % 10] || s[v] || s[0]
 }
 
 // ============================================
@@ -242,6 +315,12 @@ function getOrdinalSuffix(n: number): string {
 
 export function setOnServerTowerReady(callback: ((chunks: string[]) => void) | null) {
   onServerTowerReadyCallback = callback
+  
+  // Immediately call with current round's tower
+  if (callback) {
+    const info = getCurrentRoundInfo()
+    callback(info.chunkIds)
+  }
 }
 
 export function setOnTimerUpdate(callback: ((remaining: number, multiplier: number) => void) | null) {
@@ -256,103 +335,81 @@ export function setOnGameEnded(callback: ((winners: WinnerEntry[]) => void) | nu
   onGameEndedCallback = callback
 }
 
+export function setOnRoundChanged(callback: ((roundInfo: RoundInfo) => void) | null) {
+  onRoundChangedCallback = callback
+}
+
 // ============================================
-// PUBLIC API - State Checks
+// PUBLIC API - State
 // ============================================
 
 export function isServer(): boolean {
-  // Colyseus uses a separate server - client is never the server
   return false
 }
 
 export function isMultiplayerAvailable(): boolean {
-  return room !== null && !connectionFailed
+  return room !== null || localClockInterval !== null
 }
 
-// ============================================
-// PUBLIC API - Setup (compatibility with existing code)
-// ============================================
+export function isConnectedToServer(): boolean {
+  return room !== null
+}
 
 export function setupServer() {
-  // No-op for Colyseus - server is separate process
-  console.log('[Multiplayer] setupServer() called - Colyseus server is separate process')
+  console.log('[Multiplayer] Server is separate process')
 }
 
 export function setupClient() {
-  // State listeners already set up in initMultiplayer
-  console.log('[Multiplayer] setupClient() called - listeners already configured')
+  console.log('[Multiplayer] Client ready (clock-based sync)')
 }
 
 // ============================================
-// PUBLIC API - Send Messages to Server
+// PUBLIC API - Send to Server
 // ============================================
 
-/**
- * Send current height to server (throttled by caller)
- */
 export function sendHeightUpdate(height: number) {
-  if (!room) return
-  
-  room.send('playerHeight', { height })
+  room?.send('playerHeight', { height })
 }
 
-/**
- * Send player finished event
- */
 export function sendPlayerFinished(time: number, height: number) {
-  if (!room) return
-  
-  console.log(`[Multiplayer] 📤 Sending finish: ${time.toFixed(2)}s, ${height.toFixed(1)}m`)
-  room.send('playerFinished', { time, height })
+  console.log(`[Multiplayer] 📤 Finished: ${time.toFixed(2)}s`)
+  room?.send('playerFinished', { time, height })
 }
 
-/**
- * Send player death event
- */
 export function sendPlayerDied(height: number) {
-  if (!room) return
-  
-  console.log(`[Multiplayer] 📤 Sending death at ${height.toFixed(1)}m`)
-  room.send('playerDied', { height })
+  console.log(`[Multiplayer] 📤 Died at ${height.toFixed(1)}m`)
+  room?.send('playerDied', { height })
 }
 
-/**
- * Send player joined with display name
- */
 export function sendPlayerJoined(displayName: string, address?: string) {
-  if (!room) return
-  
-  console.log(`[Multiplayer] 📤 Sending player info: ${displayName}`)
-  room.send('playerJoined', { displayName, address })
+  console.log(`[Multiplayer] 📤 Joined as ${displayName}`)
+  room?.send('playerJoined', { displayName, address })
 }
 
 // ============================================
 // UTILITIES
 // ============================================
 
-/**
- * Format seconds as M:SS
- */
 export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-/**
- * Disconnect from server
- */
 export function disconnect() {
-  if (room) {
-    room.leave()
-    room = null
-  }
+  stopLocalClockSync()
+  room?.leave()
+  room = null
   console.log('[Multiplayer] Disconnected')
 }
 
-/**
- * Get current room session ID (for debugging)
- */
 export function getSessionId(): string | null {
   return room?.sessionId || null
+}
+
+/**
+ * Get current round info (can be called anytime!)
+ */
+export function getRoundInfo(): RoundInfo {
+  return getCurrentRoundInfo()
 }

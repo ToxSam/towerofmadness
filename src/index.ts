@@ -14,12 +14,15 @@ import {
   setOnTimerUpdate,
   setOnLeaderboardUpdate,
   setOnGameEnded,
+  setOnRoundChanged,
   sendHeightUpdate,
   sendPlayerFinished,
   sendPlayerDied,
   sendPlayerJoined,
+  getRoundInfo,
   LeaderboardEntry,
-  WinnerEntry
+  WinnerEntry,
+  RoundInfo
 } from './multiplayer'
 
 // ============================================
@@ -312,68 +315,81 @@ export async function main() {
   console.log('[Game] ═══════════════════════════════════════════')
   
   // ============================================
-  // MULTIPLAYER INITIALIZATION
+  // MULTIPLAYER INITIALIZATION (Clock-Based Sync)
   // ============================================
   
-  console.log('[Multiplayer] Initializing...')
-  const multiplayerAvailable = await initMultiplayer()
+  console.log('[Game] ⏰ Using clock-based synchronization')
+  console.log('[Game] All players worldwide share the same rounds!')
   
-  if (multiplayerAvailable) {
-    isMultiplayerMode = true
-    console.log('[Multiplayer] ✅ ENABLED')
-    
-    if (isServer()) {
-      console.log('[Multiplayer] Running as SERVER')
-      setupServer()
-      return // Server doesn't render scene
-    }
-    
-    console.log('[Multiplayer] Running as CLIENT')
-    setupClient()
-    
-    // Server sends tower data
-    setOnServerTowerReady((chunkIds: string[]) => {
-      console.log('[Multiplayer] Received tower from server!')
-      generateTowerFromServer(chunkIds)
-      
-      // Reset player state for new round
-      attemptState = AttemptState.NOT_STARTED
-      attemptTimer = 0
-      playerMaxHeight = 0
-      attemptResult = null
-      resultMessage = '🎮 New round! Go to TriggerStart to begin'
-      resultTimestamp = Date.now()
-    })
-    
-    // Server sends timer updates
-    setOnTimerUpdate((remaining: number, speedMult: number) => {
-      roundTimer = remaining
-      roundSpeedMultiplier = speedMult
-    })
-    
-    // Server sends leaderboard
-    setOnLeaderboardUpdate((players: LeaderboardEntry[]) => {
-      leaderboard = players
-    })
-    
-    // Server sends round end
-    setOnGameEnded((winners: WinnerEntry[]) => {
-      roundState = RoundState.ENDING
-      roundWinners = winners
-      resultMessage = '🏁 Round Complete!'
-      resultTimestamp = Date.now()
-      // State transition to BREAK handled by updateRoundTimer system
-    })
-    
+  // Initialize multiplayer (starts local clock sync even if server is down)
+  const serverConnected = await initMultiplayer()
+  isMultiplayerMode = true // Always true - clock sync works offline!
+  
+  if (serverConnected) {
+    console.log('[Multiplayer] ✅ Connected to server (leaderboard enabled)')
     sendPlayerJoined('Player')
   } else {
-    isMultiplayerMode = false
-    console.log('[Multiplayer] ⚠️ Not available - SINGLE PLAYER mode')
-    
-    // Start the first round
-    roundStartTime = Date.now()
-    roundState = RoundState.ACTIVE
+    console.log('[Multiplayer] ⚠️ Server offline - using local clock sync')
   }
+  
+  // Get initial round info
+  const initialRound = getRoundInfo()
+  console.log(`[Game] Current round: #${initialRound.roundNumber}`)
+  console.log(`[Game] Tower: [${initialRound.chunkIds.join(' → ')}]`)
+  console.log(`[Game] Time remaining: ${Math.floor(initialRound.remainingTime / 60)}:${(initialRound.remainingTime % 60).toString().padStart(2, '0')}`)
+  
+  // Set up round state
+  roundState = initialRound.isBreak ? RoundState.BREAK : RoundState.ACTIVE
+  roundTimer = initialRound.remainingTime
+  
+  // Tower generation callback (called on new rounds)
+  setOnServerTowerReady((chunkIds: string[]) => {
+    console.log('[Game] 🗼 Generating tower:', chunkIds.join(' → '))
+    generateTowerFromServer(chunkIds)
+    
+    // Reset player state for new round
+    attemptState = AttemptState.NOT_STARTED
+    attemptTimer = 0
+    playerMaxHeight = 0
+    attemptResult = null
+    roundState = RoundState.ACTIVE
+    resultMessage = '🎮 New round! Go to TriggerStart to begin'
+    resultTimestamp = Date.now()
+  })
+  
+  // Timer updates (every second from clock sync)
+  setOnTimerUpdate((remaining: number, speedMult: number) => {
+    roundTimer = remaining
+    roundSpeedMultiplier = speedMult
+    
+    // Detect round end
+    if (remaining <= 0 && roundState === RoundState.ACTIVE) {
+      roundState = RoundState.BREAK
+      resultMessage = '⏳ Round ended! Next round starting soon...'
+      resultTimestamp = Date.now()
+    }
+  })
+  
+  // Round change callback (for break -> active transition)
+  setOnRoundChanged((info: RoundInfo) => {
+    console.log(`[Game] 🔄 Round changed to #${info.roundNumber}`)
+    if (info.isBreak) {
+      roundState = RoundState.BREAK
+    }
+  })
+  
+  // Leaderboard updates (from server)
+  setOnLeaderboardUpdate((players: LeaderboardEntry[]) => {
+    leaderboard = players
+  })
+  
+  // Round end with winners (from server)
+  setOnGameEnded((winners: WinnerEntry[]) => {
+    roundState = RoundState.ENDING
+    roundWinners = winners
+    resultMessage = '🏁 Round Complete!'
+    resultTimestamp = Date.now()
+  })
   
   // ============================================
   // TRIGGER SETUP
@@ -541,13 +557,12 @@ export async function main() {
   }
   
   // ============================================
-  // GENERATE INITIAL TOWER (Single-player only)
+  // INITIAL TOWER (Clock-based - same for everyone!)
   // ============================================
   
-  if (!isMultiplayerMode) {
-    console.log('[Game] Generating initial tower...')
-    generateTower()
-  }
+  // Tower is generated via setOnServerTowerReady callback
+  // which was already called when we set it up above
+  console.log('[Game] 🗼 Initial tower generated from round clock')
   
   // ============================================
   // BACKGROUND MUSIC
@@ -557,7 +572,7 @@ export async function main() {
   
   console.log('[Game] ═══════════════════════════════════════════')
   console.log('[Game] ✅ Setup complete!')
-  console.log('[Game] Mode:', isMultiplayerMode ? 'MULTIPLAYER' : 'SINGLE PLAYER')
+  console.log('[Game] ⏰ Clock-based sync: All players share same tower & timer')
   console.log('[Game] ═══════════════════════════════════════════')
 }
 

@@ -1,17 +1,11 @@
 /**
- * Tower of Madness - Colyseus Multiplayer Server
+ * Tower of Madness - Colyseus Server (Clock-Based Sync)
  * 
- * This server manages:
- * - Tower generation (same chunks for all players)
- * - 7-minute round timer with speed multiplier
- * - Player leaderboard and height tracking
- * - Winner determination and new round scheduling
- * 
- * Deploy to Railway:
- * 1. Push to GitHub
- * 2. Connect Railway to repo
- * 3. Set root directory to /server
- * 4. Railway auto-deploys and provides wss:// URL
+ * Uses real-world UTC time for round synchronization:
+ * - Rounds are 7 minutes long
+ * - 10 second break between rounds
+ * - All players worldwide are in the same round
+ * - Tower is generated deterministically from round number
  */
 
 import express from 'express'
@@ -22,10 +16,16 @@ import { WebSocketTransport } from '@colyseus/ws-transport'
 import { monitor } from '@colyseus/monitor'
 import { TowerRoom } from './rooms/TowerRoom'
 
+// Constants (must match TowerRoom.ts)
+const ROUND_DURATION = 420 // 7 minutes
+const BREAK_DURATION = 10  // 10 seconds
+const TOTAL_CYCLE = ROUND_DURATION + BREAK_DURATION
+
 console.log('═══════════════════════════════════════════════════════')
 console.log('🎮 TOWER OF MADNESS - Colyseus Server')
 console.log('═══════════════════════════════════════════════════════')
 console.log(`Node.js version: ${process.version}`)
+console.log(`⏰ Clock-Based Synchronization: ${ROUND_DURATION/60} min rounds`)
 console.log('')
 
 // Create Express app
@@ -33,12 +33,32 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-// Health check endpoint (for Railway/monitoring)
+// Calculate current round info
+function getCurrentRoundInfo() {
+  const now = Math.floor(Date.now() / 1000)
+  const roundNumber = Math.floor(now / TOTAL_CYCLE)
+  const cycleProgress = now % TOTAL_CYCLE
+  const isBreak = cycleProgress >= ROUND_DURATION
+  const remainingTime = isBreak 
+    ? TOTAL_CYCLE - cycleProgress 
+    : ROUND_DURATION - cycleProgress
+  
+  return { roundNumber, isBreak, remainingTime }
+}
+
+// Health check endpoint
 app.get('/', (req, res) => {
+  const info = getCurrentRoundInfo()
+  const mins = Math.floor(info.remainingTime / 60)
+  const secs = info.remainingTime % 60
+  
   res.json({
     name: 'Tower of Madness Server',
     status: 'running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    currentRound: info.roundNumber,
+    roundState: info.isBreak ? 'BREAK' : 'ACTIVE',
+    timeRemaining: `${mins}:${secs.toString().padStart(2, '0')}`
   })
 })
 
@@ -66,12 +86,12 @@ if (process.env.NODE_ENV !== 'production') {
   console.log('📊 Colyseus Monitor available at /colyseus')
 }
 
-// Get port from environment (Railway sets this) or use default
+// Get port from environment
 const PORT = parseInt(process.env.PORT || '2567', 10)
-
-// Start the server - bind to 0.0.0.0 for external access
 const HOST = '0.0.0.0'
-httpServer.listen(PORT, HOST, () => {
+
+// Start the server
+httpServer.listen(PORT, HOST, async () => {
   console.log('')
   console.log('═══════════════════════════════════════════════════════')
   console.log(`✅ Server listening on ${HOST}:${PORT}`)
@@ -79,34 +99,31 @@ httpServer.listen(PORT, HOST, () => {
   console.log('═══════════════════════════════════════════════════════')
   console.log('')
   
-  // Create the persistent game room after a short delay
-  // This ensures Colyseus is fully initialized
+  // Create the game room at startup
   setTimeout(async () => {
-    console.log('🔧 Creating persistent room...')
+    console.log('🔧 Creating game room...')
     try {
       const room = await matchMaker.createRoom('tower_room', {})
-      console.log(`🎮 Persistent room created: ${room.roomId}`)
-      console.log('⏱️  Timer running independently of players!')
+      const info = getCurrentRoundInfo()
+      console.log(`🎮 Room created: ${room.roomId}`)
+      console.log(`⏰ Current round: #${info.roundNumber}`)
+      console.log(`📍 State: ${info.isBreak ? 'BREAK' : 'ACTIVE'} (${info.remainingTime}s remaining)`)
       console.log('')
-      console.log('🎯 Game server ready! Rounds run 24/7.')
+      console.log('🌍 All players worldwide sync to UTC clock!')
+      console.log('🎯 Server ready!')
     } catch (error: any) {
       console.error('❌ Failed to create room:', error?.message || error)
-      console.log('⚠️  Room will be created when first player joins')
     }
   }, 1000)
-  
-  console.log('Waiting for players to connect...')
 })
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('')
-  console.log('📴 Received SIGTERM, shutting down gracefully...')
+  console.log('📴 Shutting down...')
   gameServer.gracefullyShutdown()
 })
 
 process.on('SIGINT', () => {
-  console.log('')
-  console.log('📴 Received SIGINT, shutting down gracefully...')
+  console.log('📴 Shutting down...')
   gameServer.gracefullyShutdown()
 })

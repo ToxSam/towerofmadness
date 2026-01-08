@@ -1,12 +1,16 @@
 /**
- * Tower of Madness - TowerRoom
+ * Tower of Madness - TowerRoom (Clock-Based Sync)
  * 
- * Main game room that handles:
- * - Tower generation (same chunks for all players)
- * - 7-minute round timer with speed multiplier
- * - Player tracking (height, finish time)
- * - Leaderboard and winners
- * - Round lifecycle (active -> ending -> break -> new round)
+ * Uses REAL-WORLD TIME to synchronize rounds:
+ * - Rounds start every 7 minutes based on UTC time
+ * - Round 0 started at Unix epoch (Jan 1, 1970)
+ * - All clients calculate the same round from their local clock
+ * - Tower is generated deterministically from round number
+ * 
+ * This ensures:
+ * - All players see the same tower
+ * - Timer is always in sync
+ * - Works even if server restarts
  */
 
 import { Room, Client } from 'colyseus'
@@ -19,33 +23,99 @@ import { Schema, type, MapSchema, ArraySchema } from '@colyseus/schema'
 const CHUNK_OPTIONS = ['Chunk01', 'Chunk02', 'Chunk03']
 const MIN_CHUNKS = 3
 const MAX_CHUNKS = 8
-const BASE_TIMER = 420 // 7 minutes in seconds
-const ROUND_END_DISPLAY_TIME = 3000 // 3 seconds to show winners
-const NEW_ROUND_DELAY = 10000 // 10 seconds break
+const ROUND_DURATION = 420 // 7 minutes in seconds
+const BREAK_DURATION = 10 // 10 seconds break between rounds
+const TOTAL_CYCLE = ROUND_DURATION + BREAK_DURATION // 430 seconds per cycle
 const TIMER_UPDATE_INTERVAL = 1000 // Update every second
 const MAX_PLAYERS = 50
+
+// ============================================
+// SEEDED RANDOM NUMBER GENERATOR
+// ============================================
+
+/**
+ * Simple seeded random number generator
+ * Same seed = same sequence of random numbers
+ */
+class SeededRandom {
+  private seed: number
+  
+  constructor(seed: number) {
+    this.seed = seed
+  }
+  
+  // Returns a number between 0 and 1
+  next(): number {
+    this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff
+    return this.seed / 0x7fffffff
+  }
+  
+  // Returns an integer between min and max (inclusive)
+  nextInt(min: number, max: number): number {
+    return Math.floor(this.next() * (max - min + 1)) + min
+  }
+}
+
+// ============================================
+// CLOCK-BASED ROUND CALCULATOR
+// ============================================
+
+interface RoundInfo {
+  roundNumber: number
+  isBreak: boolean
+  remainingTime: number
+  cycleProgress: number
+}
+
+function getCurrentRoundInfo(): RoundInfo {
+  const now = Math.floor(Date.now() / 1000) // Current time in seconds
+  const cycleNumber = Math.floor(now / TOTAL_CYCLE)
+  const cycleProgress = now % TOTAL_CYCLE
+  
+  const isBreak = cycleProgress >= ROUND_DURATION
+  const remainingTime = isBreak 
+    ? TOTAL_CYCLE - cycleProgress // Time until next round
+    : ROUND_DURATION - cycleProgress // Time until round ends
+  
+  return {
+    roundNumber: cycleNumber,
+    isBreak,
+    remainingTime,
+    cycleProgress
+  }
+}
+
+/**
+ * Generate tower chunks deterministically from round number
+ */
+function generateTowerForRound(roundNumber: number): string[] {
+  const rng = new SeededRandom(roundNumber)
+  const numChunks = rng.nextInt(MIN_CHUNKS, MAX_CHUNKS)
+  
+  const chunks: string[] = []
+  for (let i = 0; i < numChunks; i++) {
+    const chunkIndex = rng.nextInt(0, CHUNK_OPTIONS.length - 1)
+    chunks.push(CHUNK_OPTIONS[chunkIndex])
+  }
+  
+  return chunks
+}
 
 // ============================================
 // STATE SCHEMAS
 // ============================================
 
-/**
- * Player state tracked by the server
- */
 export class PlayerState extends Schema {
   @type('string') sessionId: string = ''
   @type('string') address: string = ''
   @type('string') displayName: string = ''
   @type('number') maxHeight: number = 0
-  @type('number') bestTime: number = 0 // 0 = not finished
+  @type('number') bestTime: number = 0
   @type('boolean') isFinished: boolean = false
-  @type('number') finishOrder: number = 0 // 0 = not finished, 1 = first, 2 = second, etc.
+  @type('number') finishOrder: number = 0
   @type('number') lastUpdate: number = 0
 }
 
-/**
- * Winner entry for round results
- */
 export class WinnerState extends Schema {
   @type('string') address: string = ''
   @type('string') displayName: string = ''
@@ -54,24 +124,20 @@ export class WinnerState extends Schema {
   @type('number') rank: number = 0
 }
 
-/**
- * Main game room state
- */
 export class TowerRoomState extends Schema {
-  // Round identification
-  @type('string') roundId: string = ''
+  // Round identification (based on clock)
+  @type('number') roundNumber: number = 0
   
-  // Tower chunks (Chunk01, Chunk02, etc.)
+  // Tower chunks (deterministic from round number)
   @type(['string']) chunkIds = new ArraySchema<string>()
   
-  // Timer state
-  @type('number') roundStartTime: number = 0
-  @type('number') remainingTime: number = BASE_TIMER
+  // Timer state (calculated from clock)
+  @type('number') serverTime: number = 0 // Server's current time (for sync)
+  @type('number') remainingTime: number = ROUND_DURATION
   @type('number') speedMultiplier: number = 1
   
   // Round state
-  @type('string') roundState: string = 'ACTIVE' // ACTIVE, ENDING, BREAK
-  @type('boolean') gameEnded: boolean = false
+  @type('string') roundState: string = 'ACTIVE' // ACTIVE, BREAK
   @type('number') finisherCount: number = 0
   
   // Player tracking
@@ -86,33 +152,25 @@ export class TowerRoomState extends Schema {
 // ============================================
 
 export class TowerRoom extends Room<TowerRoomState> {
-  // Internal state
   private timerInterval: NodeJS.Timeout | null = null
-  private newRoundTimeout: NodeJS.Timeout | null = null
-  
-  // ============================================
-  // LIFECYCLE
-  // ============================================
+  private currentRoundNumber: number = -1
   
   onCreate(options: any) {
-    // Keep room alive even when empty!
+    // Keep room alive even when empty
     this.autoDispose = false
     
     console.log('[TowerRoom] ═══════════════════════════════════')
-    console.log('[TowerRoom] 🎮 Room created! (autoDispose: false)')
+    console.log('[TowerRoom] 🎮 Room created! (Clock-Based Sync)')
     console.log('[TowerRoom] ═══════════════════════════════════')
     
-    // Set max clients
     this.maxClients = MAX_PLAYERS
-    
-    // Initialize state
     this.setState(new TowerRoomState())
     
-    // Start first round
-    this.startNewRound()
+    // Initialize with current round
+    this.syncWithClock()
     
-    // Start timer update loop
-    this.timerInterval = setInterval(() => this.updateTimer(), TIMER_UPDATE_INTERVAL)
+    // Update every second
+    this.timerInterval = setInterval(() => this.syncWithClock(), TIMER_UPDATE_INTERVAL)
     
     // Register message handlers
     this.onMessage('playerHeight', (client, data) => this.handlePlayerHeight(client, data))
@@ -120,96 +178,68 @@ export class TowerRoom extends Room<TowerRoomState> {
     this.onMessage('playerDied', (client, data) => this.handlePlayerDied(client, data))
     this.onMessage('playerJoined', (client, data) => this.handlePlayerJoined(client, data))
     
-    console.log('[TowerRoom] Room initialized and waiting for players')
+    console.log('[TowerRoom] ⏰ Using UTC clock for round synchronization')
+    console.log(`[TowerRoom] Round duration: ${ROUND_DURATION}s (${ROUND_DURATION/60} min)`)
+    console.log(`[TowerRoom] Break duration: ${BREAK_DURATION}s`)
   }
-  
-  onJoin(client: Client, options: any) {
-    console.log(`[TowerRoom] 👤 Player joined: ${client.sessionId}`)
-    
-    // Create player state
-    const player = new PlayerState()
-    player.sessionId = client.sessionId
-    player.address = options?.address || client.sessionId
-    player.displayName = options?.displayName || `Player_${client.sessionId.substring(0, 4)}`
-    player.maxHeight = 0
-    player.bestTime = 0
-    player.isFinished = false
-    player.finishOrder = 0
-    player.lastUpdate = Date.now()
-    
-    // Add to players map
-    this.state.players.set(client.sessionId, player)
-    
-    console.log(`[TowerRoom] Players in room: ${this.state.players.size}`)
-    
-    // Send current tower state to new player
-    // (Colyseus auto-syncs state, but we log it for clarity)
-    console.log(`[TowerRoom] Sending tower to ${client.sessionId}: [${Array.from(this.state.chunkIds).join(', ')}]`)
-  }
-  
-  onLeave(client: Client, consented: boolean) {
-    console.log(`[TowerRoom] 👋 Player left: ${client.sessionId} (consented: ${consented})`)
-    
-    // Remove player from tracking
-    this.state.players.delete(client.sessionId)
-    
-    console.log(`[TowerRoom] Players remaining: ${this.state.players.size}`)
-  }
-  
-  onDispose() {
-    console.log('[TowerRoom] ═══════════════════════════════════')
-    console.log('[TowerRoom] 🔌 Room disposed')
-    console.log('[TowerRoom] ═══════════════════════════════════')
-    
-    // Clear intervals
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval)
-      this.timerInterval = null
-    }
-    if (this.newRoundTimeout) {
-      clearTimeout(this.newRoundTimeout)
-      this.newRoundTimeout = null
-    }
-  }
-  
-  // ============================================
-  // ROUND MANAGEMENT
-  // ============================================
   
   /**
-   * Start a new round with random tower
+   * Sync room state with real-world clock
    */
-  private startNewRound() {
-    console.log('[TowerRoom] ═══════════════════════════════════')
-    console.log('[TowerRoom] 🎮 STARTING NEW ROUND')
-    console.log('[TowerRoom] ═══════════════════════════════════')
+  private syncWithClock() {
+    const info = getCurrentRoundInfo()
     
-    // Generate round ID
-    this.state.roundId = `round_${Date.now()}`
+    // Update server time for client sync
+    this.state.serverTime = Date.now()
+    this.state.remainingTime = info.remainingTime
     
-    // Generate random tower chunks
-    const numChunks = Math.floor(Math.random() * (MAX_CHUNKS - MIN_CHUNKS + 1)) + MIN_CHUNKS
-    this.state.chunkIds.clear()
-    
-    const selectedChunks: string[] = []
-    for (let i = 0; i < numChunks; i++) {
-      const randomChunk = CHUNK_OPTIONS[Math.floor(Math.random() * CHUNK_OPTIONS.length)]
-      this.state.chunkIds.push(randomChunk)
-      selectedChunks.push(randomChunk)
+    // Check if round changed
+    if (info.roundNumber !== this.currentRoundNumber) {
+      this.currentRoundNumber = info.roundNumber
+      this.startNewRound(info.roundNumber)
     }
     
-    console.log(`[TowerRoom] Generated tower: [${selectedChunks.join(' → ')}] (${numChunks} chunks)`)
+    // Update round state
+    if (info.isBreak && this.state.roundState !== 'BREAK') {
+      this.endRound()
+    } else if (!info.isBreak && this.state.roundState === 'BREAK') {
+      // Round already started via roundNumber change
+    }
     
-    // Reset timer state
-    this.state.roundStartTime = Date.now()
-    this.state.remainingTime = BASE_TIMER
+    // Apply speed multiplier to displayed time (visual only)
+    // The actual round end is still based on clock
+    const displayTime = Math.max(0, info.remainingTime / this.state.speedMultiplier)
+    this.state.remainingTime = Math.floor(displayTime)
+    
+    // Log every 30 seconds during active round
+    if (!info.isBreak && info.remainingTime % 30 === 0 && info.remainingTime > 0 && info.remainingTime < ROUND_DURATION) {
+      const mins = Math.floor(info.remainingTime / 60)
+      const secs = info.remainingTime % 60
+      console.log(`[TowerRoom] ⏱️ ${mins}:${secs.toString().padStart(2, '0')} remaining (x${this.state.speedMultiplier})`)
+    }
+  }
+  
+  /**
+   * Start a new round with deterministic tower
+   */
+  private startNewRound(roundNumber: number) {
+    console.log('[TowerRoom] ═══════════════════════════════════')
+    console.log(`[TowerRoom] 🎮 ROUND #${roundNumber} STARTING!`)
+    console.log('[TowerRoom] ═══════════════════════════════════')
+    
+    this.state.roundNumber = roundNumber
+    this.state.roundState = 'ACTIVE'
     this.state.speedMultiplier = 1
     this.state.finisherCount = 0
-    
-    // Reset round state
-    this.state.roundState = 'ACTIVE'
-    this.state.gameEnded = false
     this.state.winners.clear()
+    
+    // Generate tower deterministically from round number
+    const chunks = generateTowerForRound(roundNumber)
+    this.state.chunkIds.clear()
+    chunks.forEach(chunk => this.state.chunkIds.push(chunk))
+    
+    console.log(`[TowerRoom] 🗼 Tower: [${chunks.join(' → ')}] (${chunks.length} chunks)`)
+    console.log(`[TowerRoom] 🌍 All players worldwide see this same tower!`)
     
     // Reset all player states
     this.state.players.forEach((player) => {
@@ -219,80 +249,32 @@ export class TowerRoom extends Room<TowerRoomState> {
       player.finishOrder = 0
     })
     
-    console.log('[TowerRoom] Round started! Timer: 7:00 (x1)')
-    
-    // Broadcast new round to all clients (state sync handles this)
+    // Broadcast new round
     this.broadcast('newRound', {
-      roundId: this.state.roundId,
-      chunkIds: Array.from(this.state.chunkIds)
+      roundNumber,
+      chunkIds: chunks
     })
   }
   
   /**
-   * Update the round timer (called every second)
-   */
-  private updateTimer() {
-    // Handle ENDING state (show winners for 3 seconds)
-    if (this.state.roundState === 'ENDING') {
-      // Just wait - the endRound function schedules the transition to BREAK
-      return
-    }
-    
-    // Handle BREAK state (waiting for new round)
-    if (this.state.roundState === 'BREAK') {
-      // Just wait - newRound will be triggered by timeout
-      return
-    }
-    
-    // ACTIVE state - count down timer
-    if (this.state.roundState === 'ACTIVE') {
-      const elapsed = (Date.now() - this.state.roundStartTime) / 1000
-      const adjustedElapsed = elapsed * this.state.speedMultiplier
-      this.state.remainingTime = Math.max(0, BASE_TIMER - adjustedElapsed)
-      
-      // Log every 30 seconds
-      if (Math.floor(this.state.remainingTime) % 30 === 0 && Math.floor(this.state.remainingTime) !== BASE_TIMER) {
-        const mins = Math.floor(this.state.remainingTime / 60)
-        const secs = Math.floor(this.state.remainingTime % 60)
-        console.log(`[TowerRoom] Timer: ${mins}:${secs.toString().padStart(2, '0')} (x${this.state.speedMultiplier})`)
-      }
-      
-      // Check if round ended
-      if (this.state.remainingTime <= 0) {
-        this.endRound()
-      }
-    }
-  }
-  
-  /**
-   * End the current round and show results
+   * End the current round
    */
   private endRound() {
     console.log('[TowerRoom] ═══════════════════════════════════')
     console.log('[TowerRoom] 🏁 ROUND ENDED!')
     console.log('[TowerRoom] ═══════════════════════════════════')
     
-    this.state.roundState = 'ENDING'
-    this.state.gameEnded = true
+    this.state.roundState = 'BREAK'
     
-    // Calculate winners (top 3 by finish time, or by height if not finished)
+    // Calculate winners
     const playerArray = Array.from(this.state.players.values())
-    
-    // Sort: finished players first (by time), then by height
     playerArray.sort((a, b) => {
-      // Both finished - sort by time (lower is better)
-      if (a.isFinished && b.isFinished) {
-        return a.bestTime - b.bestTime
-      }
-      // Only a finished
-      if (a.isFinished && !b.isFinished) return -1
-      // Only b finished
-      if (!a.isFinished && b.isFinished) return 1
-      // Neither finished - sort by height (higher is better)
+      if (a.isFinished && b.isFinished) return a.bestTime - b.bestTime
+      if (a.isFinished) return -1
+      if (b.isFinished) return 1
       return b.maxHeight - a.maxHeight
     })
     
-    // Get top 3
     this.state.winners.clear()
     const top3 = playerArray.slice(0, 3)
     
@@ -308,7 +290,6 @@ export class TowerRoom extends Room<TowerRoomState> {
       console.log(`[TowerRoom] ${index + 1}. ${player.displayName}: ${player.isFinished ? `${player.bestTime.toFixed(2)}s` : `${player.maxHeight.toFixed(1)}m (DNF)`}`)
     })
     
-    // Broadcast round ended message
     this.broadcast('roundEnded', {
       winners: top3.map((p, i) => ({
         address: p.address,
@@ -319,57 +300,76 @@ export class TowerRoom extends Room<TowerRoomState> {
       }))
     })
     
-    // Schedule transition to break state
-    setTimeout(() => {
-      this.state.roundState = 'BREAK'
-      console.log('[TowerRoom] ⏳ Break time! New round in 10 seconds...')
-      
-      // Schedule new round
-      this.newRoundTimeout = setTimeout(() => {
-        this.startNewRound()
-      }, NEW_ROUND_DELAY)
-    }, ROUND_END_DISPLAY_TIME)
+    console.log(`[TowerRoom] ⏳ Next round in ${BREAK_DURATION} seconds...`)
+  }
+  
+  // ============================================
+  // PLAYER LIFECYCLE
+  // ============================================
+  
+  onJoin(client: Client, options: any) {
+    console.log(`[TowerRoom] 👤 Player joined: ${client.sessionId}`)
+    
+    const player = new PlayerState()
+    player.sessionId = client.sessionId
+    player.address = options?.address || client.sessionId
+    player.displayName = options?.displayName || `Player_${client.sessionId.substring(0, 4)}`
+    player.maxHeight = 0
+    player.bestTime = 0
+    player.isFinished = false
+    player.finishOrder = 0
+    player.lastUpdate = Date.now()
+    
+    this.state.players.set(client.sessionId, player)
+    
+    // Send current round info to new player
+    const info = getCurrentRoundInfo()
+    console.log(`[TowerRoom] 📤 Sending round #${info.roundNumber} to ${client.sessionId}`)
+    console.log(`[TowerRoom] Players in room: ${this.state.players.size}`)
+  }
+  
+  onLeave(client: Client, consented: boolean) {
+    console.log(`[TowerRoom] 👋 Player left: ${client.sessionId}`)
+    this.state.players.delete(client.sessionId)
+    console.log(`[TowerRoom] Players remaining: ${this.state.players.size}`)
+  }
+  
+  onDispose() {
+    console.log('[TowerRoom] 🔌 Room disposed')
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval)
+    }
   }
   
   // ============================================
   // MESSAGE HANDLERS
   // ============================================
   
-  /**
-   * Handle player height update
-   */
   private handlePlayerHeight(client: Client, data: { height: number }) {
     const player = this.state.players.get(client.sessionId)
     if (!player) return
     
-    // Only update if higher than current max
     if (data.height > player.maxHeight) {
       player.maxHeight = data.height
       player.lastUpdate = Date.now()
     }
   }
   
-  /**
-   * Handle player finished (reached TriggerEnd)
-   */
   private handlePlayerFinished(client: Client, data: { time: number; height: number }) {
     const player = this.state.players.get(client.sessionId)
     if (!player || player.isFinished) return
     
-    console.log(`[TowerRoom] 🏆 Player finished: ${player.displayName} in ${data.time.toFixed(2)}s`)
+    console.log(`[TowerRoom] 🏆 ${player.displayName} finished in ${data.time.toFixed(2)}s`)
     
-    // Mark as finished
     player.isFinished = true
     player.bestTime = data.time
     player.maxHeight = data.height
     player.finishOrder = ++this.state.finisherCount
     
-    // Increase speed multiplier
-    this.state.speedMultiplier = this.state.finisherCount + 1
+    // Speed up displayed timer (visual feedback)
+    this.state.speedMultiplier = Math.min(this.state.finisherCount + 1, 5) // Cap at 5x
+    console.log(`[TowerRoom] ⚡ Visual timer speed: x${this.state.speedMultiplier}`)
     
-    console.log(`[TowerRoom] ⚡ Timer speed now: x${this.state.speedMultiplier}`)
-    
-    // Broadcast player finished
     this.broadcast('playerFinished', {
       sessionId: client.sessionId,
       displayName: player.displayName,
@@ -379,35 +379,24 @@ export class TowerRoom extends Room<TowerRoomState> {
     })
   }
   
-  /**
-   * Handle player died (entered TriggerDeath)
-   */
   private handlePlayerDied(client: Client, data: { height: number }) {
     const player = this.state.players.get(client.sessionId)
     if (!player) return
     
-    console.log(`[TowerRoom] ☠️ Player died: ${player.displayName} at ${data.height.toFixed(1)}m`)
+    console.log(`[TowerRoom] ☠️ ${player.displayName} died at ${data.height.toFixed(1)}m`)
     
-    // Update max height if this was higher
     if (data.height > player.maxHeight) {
       player.maxHeight = data.height
     }
-    
-    // Note: Player can retry (enter TriggerStart again), so we don't mark them as "finished"
   }
   
-  /**
-   * Handle player joined with display name
-   */
   private handlePlayerJoined(client: Client, data: { displayName: string; address?: string }) {
     const player = this.state.players.get(client.sessionId)
     if (!player) return
     
     player.displayName = data.displayName || player.displayName
-    if (data.address) {
-      player.address = data.address
-    }
+    if (data.address) player.address = data.address
     
-    console.log(`[TowerRoom] 📝 Player info updated: ${player.displayName}`)
+    console.log(`[TowerRoom] 📝 Player info: ${player.displayName}`)
   }
 }
