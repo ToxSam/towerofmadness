@@ -91,12 +91,16 @@ app.post('/test', (req, res) => {
   res.json({ message: 'POST works!', body: req.body })
 })
 
-// Catch-all for unmatched routes (for debugging)
-app.use((req, res, next) => {
-  if (req.url.startsWith('/matchmake')) {
-    console.log(`[DEBUG] Unmatched matchmake route: ${req.method} ${req.url}`)
-  }
-  next()
+// 404 handler for debugging
+app.use((req, res) => {
+  console.log(`[404] ${req.method} ${req.url} - Route not found`)
+  res.status(404).json({ error: 'Route not found', method: req.method, url: req.url })
+})
+
+// Global error handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[ERROR] Express error:', err)
+  res.status(500).json({ error: err.message || 'Internal server error' })
 })
 
 // Create HTTP server from Express
@@ -165,6 +169,38 @@ app.post('/matchmake/joinOrCreate/:roomName', async (req, res) => {
 
 console.log('✅ Matchmaking route /matchmake/joinOrCreate/:roomName registered')
 
+// Also add a direct route without parameter (some clients might use this)
+app.post('/matchmake/joinOrCreate/tower_room', async (req, res) => {
+  // Forward to the parameterized route
+  req.params = { roomName: 'tower_room' }
+  // Re-use the same handler logic
+  try {
+    const options = req.body || {}
+    console.log(`[Matchmaking] Direct joinOrCreate for tower_room`)
+    console.log(`[Matchmaking] Options:`, JSON.stringify(options))
+    
+    const reservation = await matchMaker.joinOrCreate('tower_room', options)
+    
+    if (!reservation || !reservation.room) {
+      throw new Error('Invalid reservation returned from matchMaker')
+    }
+    
+    console.log(`[Matchmaking] ✅ Room: ${reservation.room.roomId}`)
+    
+    res.json({
+      room: {
+        roomId: reservation.room.roomId,
+        sessionId: reservation.sessionId
+      }
+    })
+  } catch (error: any) {
+    console.error('[Matchmaking] ❌ Error:', error?.message || error)
+    res.status(500).json({ error: error?.message || 'Matchmaking failed' })
+  }
+})
+
+console.log('✅ Matchmaking route /matchmake/joinOrCreate/tower_room (direct) registered')
+
 app.post('/matchmake/create/:roomName', async (req, res) => {
   try {
     const { roomName } = req.params
@@ -230,9 +266,28 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
   console.log(`📍 State: ${info.isBreak ? 'BREAK' : 'ACTIVE'} (${info.remainingTime}s remaining)`)
   console.log('')
   
-  // Note: Room will be created automatically when first player joins via matchmaking
-  // The timer will start running once the room is created
-  // Since autoDispose = false, the room will persist and timer will continue
+  // Create persistent room at startup so timer runs immediately
+  // This ensures the timer starts even before any players join
+  setTimeout(async () => {
+    try {
+      console.log('🔧 Creating persistent game room for timer...')
+      // Use joinOrCreate which will create if it doesn't exist
+      // We use a dummy session to trigger room creation
+      const reservation = await matchMaker.joinOrCreate('tower_room', { 
+        _dummy: true // Mark as dummy so we know it's not a real player
+      })
+      
+      if (reservation && reservation.room) {
+        console.log(`🎮 Room created/ready: ${reservation.room.roomId}`)
+        console.log('⏱️ Timer will start running once room initializes!')
+      } else {
+        console.log('⚠️ Room reservation incomplete, but room may still exist')
+      }
+    } catch (error: any) {
+      console.error('❌ Failed to pre-create room:', error?.message || error)
+      console.log('ℹ️ Room will be created when first player joins')
+    }
+  }, 2000) // Wait 2 seconds for server to fully initialize
   
   console.log('🌍 All players worldwide sync to UTC clock!')
   console.log('🎯 Server ready! Waiting for players...')
