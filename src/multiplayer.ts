@@ -6,7 +6,8 @@
  * Clients: send player updates, receive game state
  */
 
-import { Schemas } from '@dcl/sdk/ecs'
+import { engine, Schemas } from '@dcl/sdk/ecs'
+import { isServer as checkIsServer, registerMessages } from '@dcl/sdk/network'
 
 // ============================================
 // TYPE DEFINITIONS
@@ -91,8 +92,9 @@ const Messages = {
 // STATE
 // ============================================
 
-let room: any = null
+let room: ReturnType<typeof registerMessages<typeof Messages>> | null = null
 let isServerInstance = false
+let multiplayerInitialized = false
 
 // Callbacks
 let _onServerTowerReady: ((chunks: string[]) => void) | null = null
@@ -105,27 +107,23 @@ let _onGameEnded: ((winners: WinnerEntry[]) => void) | null = null
 // ============================================
 
 export async function initMultiplayer(): Promise<boolean> {
+  if (multiplayerInitialized) {
+    return room !== null
+  }
+  
   try {
-    // Try to import the network module with authoritative server support
-    const network = await import('@dcl/sdk/network')
+    // Register messages and get room
+    room = registerMessages(Messages)
+    isServerInstance = checkIsServer()
+    multiplayerInitialized = true
     
-    // Check if the authoritative server features are available
-    if (typeof (network as any).registerMessages === 'function' && 
-        typeof (network as any).isServer === 'function') {
-      
-      room = (network as any).registerMessages(Messages)
-      isServerInstance = (network as any).isServer()
-      
-      console.log('[Multiplayer] ✅ Authoritative server SDK detected!')
-      console.log('[Multiplayer] Is Server:', isServerInstance)
-      return true
-    } else {
-      console.log('[Multiplayer] ⚠️ Authoritative features not found in SDK')
-      return false
-    }
+    console.log('[Multiplayer] ✅ Initialized!')
+    console.log('[Multiplayer] Is Server:', isServerInstance)
+    return true
   } catch (error) {
     console.log('[Multiplayer] ⚠️ SDK network module not available')
     console.log('[Multiplayer] Running in SINGLE-PLAYER mode')
+    multiplayerInitialized = true
     return false
   }
 }
@@ -186,7 +184,14 @@ let currentRound = {
   players: new Map<string, PlayerData>()
 }
 
-let timerInterval: ReturnType<typeof setInterval> | null = null
+// Server timer state
+let serverTimerLastTick = 0
+let serverTimerAccumulator = 0
+const SERVER_TICK_INTERVAL = 1.0 // Tick every 1 second
+
+// Delay system for round break
+let roundBreakDelay = 0
+let isWaitingForRoundBreak = false
 
 export function setupServer() {
   if (!room) {
@@ -199,7 +204,7 @@ export function setupServer() {
   console.log('[SERVER] ═══════════════════════════════════')
   
   // Handle player height updates
-  room.onMessage('playerHeightUpdate', (data: { height: number }, ctx: { from?: string }) => {
+  room.onMessage('playerHeightUpdate', (data: { height: number }, ctx) => {
     const addr = ctx?.from || 'unknown'
     
     if (!currentRound.players.has(addr)) {
@@ -222,7 +227,7 @@ export function setupServer() {
   })
   
   // Handle player finish
-  room.onMessage('playerFinished', (data: { time: number; height: number }, ctx: { from?: string }) => {
+  room.onMessage('playerFinished', (data: { time: number; height: number }, ctx) => {
     const addr = ctx?.from || 'unknown'
     const p = currentRound.players.get(addr)
     
@@ -239,12 +244,12 @@ export function setupServer() {
   })
   
   // Handle player death
-  room.onMessage('playerDied', (data: { height: number }, ctx: { from?: string }) => {
+  room.onMessage('playerDied', (data: { height: number }, ctx) => {
     console.log(`[SERVER] ☠️ ${ctx?.from} died at ${data.height.toFixed(1)}m`)
   })
   
   // Handle player join
-  room.onMessage('playerJoined', (data: { displayName: string }, ctx: { from?: string }) => {
+  room.onMessage('playerJoined', (data: { displayName: string }, ctx) => {
     const addr = ctx?.from || 'unknown'
     
     if (!currentRound.players.has(addr)) {
@@ -261,10 +266,10 @@ export function setupServer() {
     
     // Send current game state
     if (currentRound.id) {
-      room.send('gameStarted', {
+      room!.send('gameStarted', {
         roundId: currentRound.id,
         chunkIds: currentRound.chunkIds,
-        startTime: BigInt(currentRound.startTime)
+        startTime: currentRound.startTime
       })
     }
   })
@@ -272,12 +277,30 @@ export function setupServer() {
   // Start first round
   startServerRound()
   
-  // Timer tick
-  if (timerInterval === null) {
-    timerInterval = setInterval(serverTimerTick, 1000)
-  }
+  // Add server timer system using engine.addSystem
+  engine.addSystem(serverTimerSystem)
   
   console.log('[SERVER] ✅ Server ready!')
+}
+
+// Server timer system - runs every frame
+function serverTimerSystem(dt: number) {
+  // Handle round break delay
+  if (isWaitingForRoundBreak) {
+    roundBreakDelay -= dt
+    if (roundBreakDelay <= 0) {
+      isWaitingForRoundBreak = false
+      startServerRound()
+    }
+    return
+  }
+  
+  // Accumulate time and tick every SERVER_TICK_INTERVAL
+  serverTimerAccumulator += dt
+  if (serverTimerAccumulator >= SERVER_TICK_INTERVAL) {
+    serverTimerAccumulator = 0
+    serverTimerTick()
+  }
 }
 
 function startServerRound() {
@@ -304,7 +327,7 @@ function startServerRound() {
     room.send('gameStarted', {
       roundId: currentRound.id,
       chunkIds: chunks,
-      startTime: BigInt(currentRound.startTime)
+      startTime: currentRound.startTime
     })
   }
 }
@@ -353,8 +376,9 @@ function endServerRound() {
     })
   }
   
-  // New round after break
-  setTimeout(startServerRound, ROUND_BREAK * 1000)
+  // Schedule new round after break using delay system
+  roundBreakDelay = ROUND_BREAK
+  isWaitingForRoundBreak = true
 }
 
 function broadcastLeaderboard() {
@@ -386,7 +410,7 @@ export function setupClient() {
   
   console.log('[CLIENT] Connecting to server...')
   
-  room.onMessage('gameStarted', (data: { roundId: string; chunkIds: string[]; startTime: bigint }) => {
+  room.onMessage('gameStarted', (data: { roundId: string; chunkIds: string[]; startTime: number }) => {
     console.log('[CLIENT] 🎮 New round:', data.chunkIds.join(' → '))
     if (_onServerTowerReady) {
       _onServerTowerReady(data.chunkIds)
