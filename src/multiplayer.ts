@@ -8,13 +8,17 @@
  * - Works even without server connection (fallback)
  */
 
-// @ts-ignore - colyseus.js types may not be available at compile time
-import * as Colyseus from 'colyseus.js'
+// Colyseus import - may fail in some environments
+let Colyseus: any = null
+try {
+  // @ts-ignore
+  Colyseus = require('colyseus.js')
+} catch (e) {
+  console.log('[Multiplayer] Colyseus.js not available')
+}
 
 // Declare globals that may not exist in all environments
 declare const window: { location?: { search: string } } | undefined
-declare function setInterval(callback: () => void, ms: number): number
-declare function clearInterval(handle: number): void
 
 // ============================================
 // CONSTANTS (Must match server!)
@@ -153,8 +157,8 @@ function getServerUrl(): string {
 // STATE
 // ============================================
 
-let client: Colyseus.Client | null = null
-let room: Colyseus.Room | null = null
+let client: any = null
+let room: any = null
 let multiplayerInitialized = false
 let connectionFailed = false
 let currentRoundNumber = -1
@@ -170,49 +174,64 @@ let onRoundChangedCallback: ((roundInfo: RoundInfo) => void) | null = null
 // LOCAL CLOCK SYNC (Works without server!)
 // ============================================
 
-let localClockInterval: number | null = null
+let localClockActive = false
+let lastClockCheck = 0
 
 /**
  * Start local clock-based updates
- * This ensures game works even if server is down
+ * Uses polling instead of setInterval for Decentraland compatibility
  */
 function startLocalClockSync() {
-  if (localClockInterval) return
+  if (localClockActive) return
+  localClockActive = true
+  lastClockCheck = Date.now()
   
-  console.log('[Multiplayer] ⏰ Starting local clock sync')
+  console.log('[Multiplayer] ⏰ Clock sync enabled')
   
-  localClockInterval = setInterval(() => {
-    const info = getCurrentRoundInfo()
+  // Initialize with current round
+  const info = getCurrentRoundInfo()
+  currentRoundNumber = info.roundNumber
+}
+
+/**
+ * Call this from a Decentraland system to update clock
+ * (called by initMultiplayer setup)
+ */
+function checkClockUpdate() {
+  if (!localClockActive) return
+  
+  const now = Date.now()
+  if (now - lastClockCheck < 1000) return // Only check every second
+  lastClockCheck = now
+  
+  const info = getCurrentRoundInfo()
+  
+  // Detect round change
+  if (info.roundNumber !== currentRoundNumber) {
+    currentRoundNumber = info.roundNumber
+    console.log(`[Multiplayer] 🎮 Round #${info.roundNumber}`)
     
-    // Detect round change
-    if (info.roundNumber !== currentRoundNumber) {
-      currentRoundNumber = info.roundNumber
-      console.log(`[Multiplayer] 🎮 Round #${info.roundNumber} (clock-based)`)
-      console.log(`[Multiplayer] 🗼 Tower: [${info.chunkIds.join(' → ')}]`)
-      
-      if (onRoundChangedCallback) {
-        onRoundChangedCallback(info)
-      }
-      if (onServerTowerReadyCallback) {
-        onServerTowerReadyCallback(info.chunkIds)
-      }
+    if (onRoundChangedCallback) {
+      onRoundChangedCallback(info)
     }
-    
-    // Update timer
-    if (onTimerUpdateCallback) {
-      // Get speed multiplier from server if connected
-      const multiplier = room ? (room.state as any)?.speedMultiplier || 1 : 1
-      onTimerUpdateCallback(info.remainingTime, multiplier)
+    if (onServerTowerReadyCallback) {
+      onServerTowerReadyCallback(info.chunkIds)
     }
-  }, 1000)
+  }
+  
+  // Update timer
+  if (onTimerUpdateCallback) {
+    const multiplier = room ? (room.state as any)?.speedMultiplier || 1 : 1
+    onTimerUpdateCallback(info.remainingTime, multiplier)
+  }
 }
 
 function stopLocalClockSync() {
-  if (localClockInterval) {
-    clearInterval(localClockInterval)
-    localClockInterval = null
-  }
+  localClockActive = false
 }
+
+// Export for use in engine system
+export { checkClockUpdate }
 
 // ============================================
 // INITIALIZATION
@@ -225,8 +244,14 @@ export async function initMultiplayer(): Promise<boolean> {
   
   multiplayerInitialized = true
   
-  // Always start local clock sync first (works offline!)
+  // Start local clock sync (works offline!)
   startLocalClockSync()
+  
+  // Check if Colyseus is available
+  if (!Colyseus) {
+    console.log('[Multiplayer] ⚠️ Colyseus not loaded - offline mode')
+    return false
+  }
   
   const serverUrl = getServerUrl()
   
@@ -348,7 +373,7 @@ export function isServer(): boolean {
 }
 
 export function isMultiplayerAvailable(): boolean {
-  return room !== null || localClockInterval !== null
+  return room !== null || localClockActive
 }
 
 export function isConnectedToServer(): boolean {

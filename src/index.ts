@@ -20,6 +20,7 @@ import {
   sendPlayerDied,
   sendPlayerJoined,
   getRoundInfo,
+  checkClockUpdate,
   LeaderboardEntry,
   WinnerEntry,
   RoundInfo
@@ -315,68 +316,105 @@ export async function main() {
   console.log('[Game] ═══════════════════════════════════════════')
   
   // ============================================
-  // MULTIPLAYER INITIALIZATION (Clock-Based Sync)
+  // MULTIPLAYER INITIALIZATION (with fallback)
   // ============================================
   
-  console.log('[Game] ⏰ Using clock-based synchronization')
-  console.log('[Game] All players worldwide share the same rounds!')
-  
-  // Initialize multiplayer (starts local clock sync even if server is down)
-  const serverConnected = await initMultiplayer()
-  isMultiplayerMode = true // Always true - clock sync works offline!
-  
-  if (serverConnected) {
-    console.log('[Multiplayer] ✅ Connected to server (leaderboard enabled)')
-    sendPlayerJoined('Player')
-  } else {
-    console.log('[Multiplayer] ⚠️ Server offline - using local clock sync')
-  }
-  
-  // Get initial round info
-  const initialRound = getRoundInfo()
-  console.log(`[Game] Current round: #${initialRound.roundNumber}`)
-  console.log(`[Game] Tower: [${initialRound.chunkIds.join(' → ')}]`)
-  console.log(`[Game] Time remaining: ${Math.floor(initialRound.remainingTime / 60)}:${(initialRound.remainingTime % 60).toString().padStart(2, '0')}`)
-  
-  // Set up round state
-  roundState = initialRound.isBreak ? RoundState.BREAK : RoundState.ACTIVE
-  roundTimer = initialRound.remainingTime
-  
-  // Tower generation callback (called on new rounds)
-  setOnServerTowerReady((chunkIds: string[]) => {
-    console.log('[Game] 🗼 Generating tower:', chunkIds.join(' → '))
-    generateTowerFromServer(chunkIds)
+  try {
+    console.log('[Game] ⏰ Initializing clock-based sync...')
     
-    // Reset player state for new round
-    attemptState = AttemptState.NOT_STARTED
-    attemptTimer = 0
-    playerMaxHeight = 0
-    attemptResult = null
+    // Try to initialize multiplayer (may fail in some environments)
+    let serverConnected = false
+    try {
+      serverConnected = await initMultiplayer()
+      isMultiplayerMode = true
+      
+      if (serverConnected) {
+        console.log('[Multiplayer] ✅ Connected to server')
+        sendPlayerJoined('Player')
+      } else {
+        console.log('[Multiplayer] ⚠️ Server offline - local mode')
+      }
+    } catch (mpError) {
+      console.error('[Multiplayer] ❌ Failed to initialize:', mpError)
+      console.log('[Game] Continuing without multiplayer...')
+      isMultiplayerMode = false
+    }
+    
+    // Get initial round info (works even without server)
+    let initialRound: RoundInfo
+    try {
+      initialRound = getRoundInfo()
+    } catch (e) {
+      // Fallback: generate local round info
+      console.log('[Game] Using fallback round generation')
+      const now = Math.floor(Date.now() / 1000)
+      const roundNumber = Math.floor(now / 430) // 420 + 10 break
+      initialRound = {
+        roundNumber,
+        isBreak: false,
+        remainingTime: 420,
+        chunkIds: ['Chunk01', 'Chunk02', 'Chunk03'] // Default tower
+      }
+    }
+    
+    console.log(`[Game] Round #${initialRound.roundNumber}`)
+    console.log(`[Game] Tower: [${initialRound.chunkIds.join(' → ')}]`)
+    
+    // Set up round state
+    roundState = initialRound.isBreak ? RoundState.BREAK : RoundState.ACTIVE
+    roundTimer = initialRound.remainingTime
+    
+    // GENERATE INITIAL TOWER IMMEDIATELY
+    console.log('[Game] 🗼 Generating initial tower...')
+    generateTowerFromServer(initialRound.chunkIds)
+    
+    // Set up callbacks for future rounds (if multiplayer works)
+    if (isMultiplayerMode) {
+      setOnServerTowerReady((chunkIds: string[]) => {
+        console.log('[Game] 🗼 New tower:', chunkIds.join(' → '))
+        generateTowerFromServer(chunkIds)
+        
+        attemptState = AttemptState.NOT_STARTED
+        attemptTimer = 0
+        playerMaxHeight = 0
+        attemptResult = null
+        roundState = RoundState.ACTIVE
+        resultMessage = '🎮 New round! Go to TriggerStart to begin'
+        resultTimestamp = Date.now()
+      })
+      
+      setOnTimerUpdate((remaining: number, speedMult: number) => {
+        roundTimer = remaining
+        roundSpeedMultiplier = speedMult
+        
+        if (remaining <= 0 && roundState === RoundState.ACTIVE) {
+          roundState = RoundState.BREAK
+          resultMessage = '⏳ Round ended! Next round starting soon...'
+          resultTimestamp = Date.now()
+        }
+      })
+      
+      setOnRoundChanged((info: RoundInfo) => {
+        console.log(`[Game] 🔄 Round #${info.roundNumber}`)
+        if (info.isBreak) {
+          roundState = RoundState.BREAK
+        }
+      })
+      
+      setOnLeaderboardUpdate((players: LeaderboardEntry[]) => {
+        leaderboard = players
+      })
+    }
+  } catch (initError) {
+    console.error('[Game] ❌ Initialization error:', initError)
+    console.log('[Game] Falling back to single-player mode...')
+    isMultiplayerMode = false
     roundState = RoundState.ACTIVE
-    resultMessage = '🎮 New round! Go to TriggerStart to begin'
-    resultTimestamp = Date.now()
-  })
-  
-  // Timer updates (every second from clock sync)
-  setOnTimerUpdate((remaining: number, speedMult: number) => {
-    roundTimer = remaining
-    roundSpeedMultiplier = speedMult
+    roundTimer = 420
     
-    // Detect round end
-    if (remaining <= 0 && roundState === RoundState.ACTIVE) {
-      roundState = RoundState.BREAK
-      resultMessage = '⏳ Round ended! Next round starting soon...'
-      resultTimestamp = Date.now()
-    }
-  })
-  
-  // Round change callback (for break -> active transition)
-  setOnRoundChanged((info: RoundInfo) => {
-    console.log(`[Game] 🔄 Round changed to #${info.roundNumber}`)
-    if (info.isBreak) {
-      roundState = RoundState.BREAK
-    }
-  })
+    // Generate default tower
+    generateTower()
+  }
   
   // Leaderboard updates (from server)
   setOnLeaderboardUpdate((players: LeaderboardEntry[]) => {
@@ -508,6 +546,11 @@ export async function main() {
   
   engine.addSystem(trackPlayerHeight)
   engine.addSystem(updateRoundTimer)
+  
+  // Clock sync system (updates timer from UTC clock)
+  engine.addSystem(() => {
+    checkClockUpdate()
+  })
   
   // Debug log every 5 seconds
   let lastDebugLog = 0
