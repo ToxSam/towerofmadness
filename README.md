@@ -1,6 +1,6 @@
 # Tower of Madness 🏗️
 
-A procedurally generated tower climbing game for Decentraland SDK7. Climb randomly generated towers, track your progress, and compete for the best time and height!
+A procedurally generated tower climbing game for Decentraland SDK7. Climb randomly generated towers, track your progress, and compete for the best time and height! Features multiplayer support for collaborative climbing experiences.
 
 ## 🎮 Features
 
