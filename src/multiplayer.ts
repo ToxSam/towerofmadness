@@ -8,6 +8,90 @@
  * - Works even without server connection (fallback)
  */
 
+// Polyfill XMLHttpRequest for Decentraland environment (colyseus.js needs it)
+if (typeof (globalThis as any).XMLHttpRequest === 'undefined') {
+  (globalThis as any).XMLHttpRequest = class XMLHttpRequest {
+    public readyState: number = 0
+    public status: number = 0
+    public statusText: string = ''
+    public responseText: string = ''
+    public response: any = null
+    public responseType: string = ''
+    public onreadystatechange: (() => void) | null = null
+    public onload: (() => void) | null = null
+    public onerror: ((e: any) => void) | null = null
+    
+    private method: string = 'GET'
+    private url: string = ''
+    private headers: Record<string, string> = {}
+    private async: boolean = true
+    
+    open(method: string, url: string, async: boolean = true) {
+      this.method = method
+      this.url = url
+      this.async = async
+      this.readyState = 1
+    }
+    
+    setRequestHeader(name: string, value: string) {
+      this.headers[name] = value
+    }
+    
+    send(body?: string | null) {
+      this.readyState = 2
+      
+      // Use fetch if available
+      const fetchFn = (globalThis as any).fetch
+      if (fetchFn) {
+        fetchFn(this.url, {
+          method: this.method,
+          headers: this.headers,
+          body: body
+        })
+        .then((response: any) => {
+          this.status = response.status
+          this.statusText = response.statusText
+          this.readyState = 3
+          return response.text()
+        })
+        .then((text: string) => {
+          this.responseText = text
+          this.response = text
+          this.readyState = 4
+          if (this.onreadystatechange) this.onreadystatechange()
+          if (this.onload) this.onload()
+        })
+        .catch((error: any) => {
+          this.readyState = 4
+          this.status = 0
+          if (this.onerror) this.onerror(error)
+          if (this.onreadystatechange) this.onreadystatechange()
+        })
+      } else {
+        // No fetch available, fail gracefully
+        console.log('[XMLHttpRequest polyfill] fetch not available')
+        this.readyState = 4
+        this.status = 0
+        if (this.onerror) this.onerror(new Error('fetch not available'))
+        if (this.onreadystatechange) this.onreadystatechange()
+      }
+    }
+    
+    abort() {
+      this.readyState = 0
+    }
+    
+    getResponseHeader(name: string): string | null {
+      return null
+    }
+    
+    getAllResponseHeaders(): string {
+      return ''
+    }
+  }
+  console.log('[Multiplayer] XMLHttpRequest polyfill installed')
+}
+
 // Polyfill URL class for Decentraland environment (colyseus.js needs it)
 if (typeof (globalThis as any).URL === 'undefined') {
   (globalThis as any).URL = class URL {
