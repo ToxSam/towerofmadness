@@ -10,7 +10,8 @@
     "upgrade-sdk:next": "npm install --save-dev @dcl/sdk@next"
   },
   "dependencies": {
-    "colyseus.js": "^0.15.0"
+    "colyseus.js": "^0.15.0",
+    "@dcl/asset-packs": "^1.0.0"
   },
   "devDependencies": {
     "@dcl/sdk": "latest"
