@@ -86,9 +86,6 @@ export class TowerRoomState extends Schema {
 // ============================================
 
 export class TowerRoom extends Room<TowerRoomState> {
-  // Keep room alive even when empty!
-  autoDispose = false
-  
   // Internal state
   private timerInterval: NodeJS.Timeout | null = null
   private newRoundTimeout: NodeJS.Timeout | null = null
@@ -98,8 +95,11 @@ export class TowerRoom extends Room<TowerRoomState> {
   // ============================================
   
   onCreate(options: any) {
+    // Keep room alive even when empty!
+    this.autoDispose = false
+    
     console.log('[TowerRoom] ═══════════════════════════════════')
-    console.log('[TowerRoom] 🎮 Room created!')
+    console.log('[TowerRoom] 🎮 Room created! (autoDispose: false)')
     console.log('[TowerRoom] ═══════════════════════════════════')
     
     // Set max clients
