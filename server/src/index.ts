@@ -16,7 +16,7 @@
 
 import express from 'express'
 import cors from 'cors'
-import { Server } from 'colyseus'
+import { Server, matchMaker } from 'colyseus'
 import { createServer } from 'http'
 import { WebSocketTransport } from '@colyseus/ws-transport'
 import { monitor } from '@colyseus/monitor'
@@ -70,14 +70,24 @@ if (process.env.NODE_ENV !== 'production') {
 const PORT = parseInt(process.env.PORT || '2567', 10)
 
 // Start the server
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, async () => {
   console.log('')
   console.log('═══════════════════════════════════════════════════════')
   console.log(`✅ Server listening on port ${PORT}`)
   console.log(`📡 WebSocket URL: ws://localhost:${PORT}`)
   console.log('═══════════════════════════════════════════════════════')
   console.log('')
-  console.log('Room: "tower_room" registered')
+  
+  // Create the persistent game room at startup
+  // This ensures the room exists and runs even with 0 players
+  try {
+    const room = await matchMaker.createRoom('tower_room', {})
+    console.log(`🎮 Persistent room created: ${room.roomId}`)
+    console.log('⏱️  Timer running independently of players!')
+  } catch (error) {
+    console.error('❌ Failed to create room:', error)
+  }
+  
   console.log('')
   console.log('Waiting for players to connect...')
 })

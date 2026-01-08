@@ -86,6 +86,9 @@ export class TowerRoomState extends Schema {
 // ============================================
 
 export class TowerRoom extends Room<TowerRoomState> {
+  // Keep room alive even when empty!
+  autoDispose = false
+  
   // Internal state
   private timerInterval: NodeJS.Timeout | null = null
   private newRoundTimeout: NodeJS.Timeout | null = null
