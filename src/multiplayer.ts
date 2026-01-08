@@ -404,8 +404,12 @@ export function sendHeightUpdate(height: number) {
 }
 
 export function sendPlayerFinished(time: number, height: number) {
-  console.log(`[Multiplayer] 📤 Finished: ${time.toFixed(2)}s`)
-  room?.send('playerFinished', { time, height })
+  if (room) {
+    console.log(`[Multiplayer] 📤 Sending FINISH to server: ${time.toFixed(2)}s`)
+    room.send('playerFinished', { time, height })
+  } else {
+    console.log('[Multiplayer] ⚠️ Not connected - finish not sent to server')
+  }
 }
 
 export function sendPlayerDied(height: number) {

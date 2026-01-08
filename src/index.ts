@@ -259,7 +259,7 @@ function finishAttempt() {
   if (attemptState !== AttemptState.IN_PROGRESS) return
   if (roundState !== RoundState.ACTIVE) return
   
-  console.log('[Game] ========== ATTEMPT FINISHED! ==========')
+  console.log('[Game] ========== YOU FINISHED! ==========')
   attemptState = AttemptState.FINISHED
   attemptFinishTime = attemptTimer
   attemptResult = 'WIN'
@@ -269,41 +269,40 @@ function finishAttempt() {
   // Update personal best
   if (attemptFinishTime < bestAttemptTime || bestAttemptTime === 0) {
     bestAttemptTime = attemptFinishTime
+    console.log(`[Game] New personal best: ${bestAttemptTime.toFixed(2)}s`)
   }
   if (playerMaxHeight > bestAttemptHeight) {
     bestAttemptHeight = playerMaxHeight
   }
   
-  // Speed up the round timer!
-  roundFinishers++
-  roundSpeedMultiplier = roundFinishers + 1
-  console.log(`[Game] Timer speed now: x${roundSpeedMultiplier}`)
-  
-  // Send to server
+  // Send to server - server handles speed multiplier for everyone
   if (isMultiplayerMode) {
+    console.log('[Game] Sending finish to server...')
     sendPlayerFinished(attemptFinishTime, playerMaxHeight)
   }
+  // Note: Speed multiplier comes FROM server, not set locally
 }
 
-// Called when player enters TriggerDeath
+// Called when player enters TriggerDeath (LOCAL player only!)
 function dieAttempt() {
   if (attemptState !== AttemptState.IN_PROGRESS) return
   
-  console.log('[Game] ========== PLAYER DIED! ==========')
+  console.log('[Game] ========== YOU DIED! ==========')
   attemptState = AttemptState.DIED
   attemptResult = 'DEATH'
   resultMessage = `☠️ DEATH at ${playerMaxHeight.toFixed(1)}m - Go to TriggerStart to retry!`
   resultTimestamp = Date.now()
   
-  // Update personal best height even on death
+  // Update YOUR personal best height even on death
   if (playerMaxHeight > bestAttemptHeight) {
     bestAttemptHeight = playerMaxHeight
   }
   
-  // Send to server
+  // Send YOUR death to server (for leaderboard tracking only)
   if (isMultiplayerMode) {
     sendPlayerDied(playerMaxHeight)
   }
+  // Note: Other players' deaths don't affect YOUR game state
 }
 
 // ============================================
