@@ -38,9 +38,7 @@ app.get('/', (req, res) => {
   res.json({
     name: 'Tower of Madness Server',
     status: 'running',
-    timestamp: new Date().toISOString(),
-    rooms: gameServer.matchMaker.stats.roomCount,
-    connections: gameServer.matchMaker.stats.ccu
+    timestamp: new Date().toISOString()
   })
 })
 
