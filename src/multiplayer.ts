@@ -8,14 +8,8 @@
  * - Works even without server connection (fallback)
  */
 
-// Colyseus import - may fail in some environments
-let Colyseus: any = null
-try {
-  // @ts-ignore
-  Colyseus = require('colyseus.js')
-} catch (e) {
-  console.log('[Multiplayer] Colyseus.js not available')
-}
+// @ts-ignore - Colyseus import
+import * as Colyseus from 'colyseus.js'
 
 // Declare globals that may not exist in all environments
 declare const window: { location?: { search: string } } | undefined
@@ -254,35 +248,33 @@ export async function initMultiplayer(): Promise<boolean> {
   // Start local clock sync (works offline!)
   startLocalClockSync()
   
-  // Check if Colyseus is available
-  if (!Colyseus) {
-    console.log('[Multiplayer] ⚠️ Colyseus not loaded - offline mode')
-    return false
-  }
-  
   const serverUrl = getServerUrl()
   
   console.log('[Multiplayer] ═══════════════════════════════════')
-  console.log('[Multiplayer] 🔌 Connecting to server...')
+  console.log('[Multiplayer] 🔌 Connecting to Colyseus server...')
   console.log(`[Multiplayer] URL: ${serverUrl}`)
   console.log('[Multiplayer] ═══════════════════════════════════')
   
   try {
+    console.log('[Multiplayer] Creating Colyseus client...')
     client = new Colyseus.Client(serverUrl)
+    
+    console.log('[Multiplayer] Joining tower_room...')
     room = await client.joinOrCreate('tower_room', {
       displayName: 'Player',
     })
     
-    console.log('[Multiplayer] ✅ Connected!')
+    console.log('[Multiplayer] ✅ Connected to server!')
     console.log(`[Multiplayer] Session: ${room.sessionId}`)
     console.log(`[Multiplayer] Room: ${room.roomId}`)
     
     setupStateListeners()
     return true
-  } catch (error) {
+  } catch (error: any) {
     connectionFailed = true
-    console.error('[Multiplayer] ❌ Connection failed:', error)
-    console.log('[Multiplayer] ⏰ Using local clock sync (offline mode)')
+    console.error('[Multiplayer] ❌ Connection failed!')
+    console.error('[Multiplayer] Error:', error?.message || error)
+    console.log('[Multiplayer] ⏰ Continuing with local clock sync (offline mode)')
     return false
   }
 }
