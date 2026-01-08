@@ -58,7 +58,9 @@ app.use(express.json())
 
 // Request logging middleware (with body for POST)
 app.use((req, res, next) => {
-  console.log(`[HTTP] ${req.method} ${req.url}`)
+  const timestamp = new Date().toISOString()
+  console.log(`[HTTP] [${timestamp}] ${req.method} ${req.url}`)
+  console.log(`[HTTP] Headers:`, JSON.stringify(req.headers))
   if (req.method === 'POST' && req.body) {
     console.log(`[HTTP] Body:`, JSON.stringify(req.body))
   }
@@ -88,7 +90,15 @@ app.get('/health', (req, res) => {
 // Test route to verify POST requests work
 app.post('/test', (req, res) => {
   console.log('[TEST] POST /test received')
+  console.log('[TEST] Body:', JSON.stringify(req.body))
   res.json({ message: 'POST works!', body: req.body })
+})
+
+// Simple matchmaking test (no parameters)
+app.post('/matchmake/test', (req, res) => {
+  console.log('[TEST] POST /matchmake/test received')
+  console.log('[TEST] This confirms POST requests to /matchmake/* work')
+  res.json({ message: 'Matchmake POST works!', body: req.body })
 })
 
 // 404 handler for debugging
