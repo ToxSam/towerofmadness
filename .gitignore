@@ -3,7 +3,7 @@ node_modules/
 server/node_modules/
 
 # Build output
-dist/
+dist
 bin/
 
 # IDE and editor files
