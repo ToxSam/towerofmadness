@@ -207,16 +207,4 @@ function setupMessageHandlers(gameState: GameState) {
       time: serverTime
     })
   })
-
-  // NTP-style time sync - respond only to the requesting client
-  room.onMessage('timeSync', (data, context) => {
-    if (!context) return
-    const t2 = Date.now()
-    const t3 = Date.now()
-    room.send('timeSyncResponse', {
-      id: data.id,
-      t2: t2,
-      t3: t3
-    }, { to: [context.from] })
-  })
 }

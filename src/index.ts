@@ -24,7 +24,8 @@ import {
 // GAME STATE
 // ============================================
 
-;(globalThis as any).DEBUG_NETWORK_MESSAGES = true
+;import { initTimeSync } from './shared/timeSync'
+(globalThis as any).DEBUG_NETWORK_MESSAGES = true
 
 // Player tracking
 export let playerHeight = 0
@@ -265,6 +266,7 @@ export async function main() {
   // ============================================
   // SERVER/CLIENT BRANCHING
   // ============================================
+  initTimeSync({ isServer: isServer() })
 
   if (isServer()) {
     console.log('[Game] Running as SERVER')

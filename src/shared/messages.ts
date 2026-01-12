@@ -19,18 +19,6 @@ export const Messages = {
     finishOrder: Schemas.Number,
     speedMultiplier: Schemas.Number,
     time: Schemas.Number // Server-calculated finish time
-  }),
-
-  // Client -> Server: Time sync request (NTP-style)
-  timeSync: Schemas.Map({
-    id: Schemas.String // Unique request ID (sessionId:counter)
-  }),
-
-  // Server -> Client: Time sync response
-  timeSyncResponse: Schemas.Map({
-    id: Schemas.String, // Echo request ID
-    t2: Schemas.Int64,  // Server receive time
-    t3: Schemas.Int64   // Server send time
   })
 }
 

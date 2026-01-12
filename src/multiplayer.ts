@@ -19,12 +19,7 @@ import {
   WinnerEntry,
   TowerConfig
 } from './shared/schemas'
-import {
-  initTimeSync,
-  getServerTime,
-  isTimeSyncReady,
-  getTimeSyncOffset
-} from './shared/timeSync'
+import { getServerTime, isTimeSyncReady, getTimeSyncOffset } from './shared/timeSync'
 
 // Re-export types for compatibility
 export type { LeaderboardEntry, WinnerEntry, TowerConfig }
@@ -44,9 +39,6 @@ export { isServer } from '@dcl/sdk/network'
 let onPlayerFinishedCallback: ((displayName: string, time: number, finishOrder: number) => void) | null = null
 
 export function setupClient() {
-  // Initialize time sync with the room
-  initTimeSync(room)
-
   // Listen for player finished broadcasts
   room.onMessage('playerFinishedBroadcast', (data) => {
     console.log(`[Game] ${data.displayName} finished #${data.finishOrder} in ${data.time.toFixed(2)}s`)
