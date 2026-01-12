@@ -541,10 +541,11 @@ const GameUI = () => {
               ? player.displayName.substring(0, 10) + '..'
               : player.displayName
 
-            // Show time for finished players, height for in-progress
-            const statsDisplay = player.isFinished
-              ? `${player.bestTime.toFixed(1)}s (${player.maxHeight.toFixed(0)}m)`
-              : `${player.maxHeight.toFixed(0)}m`
+            // Always show all-time bests
+            const hasFinished = player.allTimeFinishCount > 0
+            const statsDisplay = hasFinished
+              ? `${player.allTimeBestTime.toFixed(1)}s (${player.allTimeBestHeight.toFixed(0)}m)`
+              : `${player.allTimeBestHeight.toFixed(0)}m`
 
             return (
               <UiEntity
@@ -559,7 +560,7 @@ const GameUI = () => {
                 uiText={{
                   value: `${medal} ${name} ${statsDisplay}`,
                   fontSize: 13 * s,
-                  color: player.isFinished ? Color4.Green() : Color4.White(),
+                  color: hasFinished ? Color4.Green() : Color4.White(),
                   textAlign: 'middle-left'
                 }}
               />

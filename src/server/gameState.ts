@@ -387,27 +387,27 @@ export class GameState {
   }
 
   private updateLeaderboard() {
-    const playerArray = Array.from(this.players.values())
-    playerArray.sort((a, b) => {
-      if (a.isFinished && b.isFinished) return a.finishOrder - b.finishOrder
-      if (a.isFinished) return -1
-      if (b.isFinished) return 1
-      return b.maxHeight - a.maxHeight
+    // Get all-time bests sorted by: finishers first (by best time), then by best height
+    const allTimeSorted = Array.from(this.allTimeBests.values()).sort((a, b) => {
+      if (a.finishCount > 0 && b.finishCount > 0) return a.bestTime - b.bestTime
+      if (a.finishCount > 0) return -1
+      if (b.finishCount > 0) return 1
+      return b.bestHeight - a.bestHeight
     })
 
     const leaderboard = LeaderboardComponent.getMutable(this.leaderboardEntity)
-    leaderboard.players = playerArray.slice(0, 10).map((p) => {
-      const allTime = this.allTimeBests.get(p.address.toLowerCase())
+    leaderboard.players = allTimeSorted.slice(0, 10).map((allTime) => {
+      const currentRound = this.players.get(allTime.address)
       return {
-        address: p.address,
-        displayName: p.displayName,
-        maxHeight: p.maxHeight,
-        bestTime: p.bestTime,
-        isFinished: p.isFinished,
-        finishOrder: p.finishOrder,
-        allTimeBestTime: allTime?.bestTime || 0,
-        allTimeBestHeight: allTime?.bestHeight || 0,
-        allTimeFinishCount: allTime?.finishCount || 0
+        address: allTime.address,
+        displayName: allTime.displayName,
+        maxHeight: currentRound?.maxHeight || 0,
+        bestTime: currentRound?.bestTime || 0,
+        isFinished: currentRound?.isFinished || false,
+        finishOrder: currentRound?.finishOrder || 0,
+        allTimeBestTime: allTime.bestTime,
+        allTimeBestHeight: allTime.bestHeight,
+        allTimeFinishCount: allTime.finishCount
       }
     })
   }
