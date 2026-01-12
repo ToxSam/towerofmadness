@@ -40,14 +40,24 @@ export { isServer } from '@dcl/sdk/network'
 // CLIENT SETUP
 // ============================================
 
+// Callback for when any player finishes (includes server-authoritative time)
+let onPlayerFinishedCallback: ((displayName: string, time: number, finishOrder: number) => void) | null = null
+
 export function setupClient() {
   // Initialize time sync with the room
   initTimeSync(room)
 
   // Listen for player finished broadcasts
   room.onMessage('playerFinishedBroadcast', (data) => {
-    console.log(`[Game] ${data.displayName} finished #${data.finishOrder}`)
+    console.log(`[Game] ${data.displayName} finished #${data.finishOrder} in ${data.time.toFixed(2)}s`)
+    if (onPlayerFinishedCallback) {
+      onPlayerFinishedCallback(data.displayName, data.time, data.finishOrder)
+    }
   })
+}
+
+export function onPlayerFinished(callback: (displayName: string, time: number, finishOrder: number) => void) {
+  onPlayerFinishedCallback = callback
 }
 
 

@@ -1,4 +1,4 @@
-import { engine, Transform, TriggerArea, ColliderLayer, AudioSource, Entity } from '@dcl/sdk/ecs'
+import { engine, Transform, TriggerArea, ColliderLayer, AudioSource, Entity, AvatarBase } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
 import { isServer, isStateSyncronized } from '@dcl/sdk/network'
 import { EntityNames } from '../assets/scene/entity-names'
@@ -9,6 +9,7 @@ import {
   sendPlayerStarted,
   sendPlayerFinished,
   sendPlayerJoined,
+  onPlayerFinished,
   getRoundState,
   getLeaderboard,
   getWinners,
@@ -45,6 +46,17 @@ export let attemptFinishTime: number = 0
 // Personal best
 export let bestAttemptTime: number = 0
 export let bestAttemptHeight: number = 0
+
+// Local player tracking
+export let localPlayerName: string = ''
+export function setLocalPlayerName(name: string) {
+  localPlayerName = name
+}
+export function updateBestTime(time: number) {
+  if (time > 0 && (bestAttemptTime === 0 || time < bestAttemptTime)) {
+    bestAttemptTime = time
+  }
+}
 
 // Result display
 export let attemptResult: 'WIN' | 'DEATH' | null = null
@@ -135,6 +147,13 @@ function syncRoundState() {
   if (!hasJoinedServer) {
     hasJoinedServer = true
     sendPlayerJoined()
+
+    // Get our local player name from AvatarBase
+    const avatarBase = AvatarBase.getOrNull(engine.PlayerEntity)
+    if (avatarBase?.name) {
+      setLocalPlayerName(avatarBase.name)
+      console.log(`[Game] Local player name: ${avatarBase.name}`)
+    }
   }
 
   roundTimer = state.remainingTime
@@ -209,18 +228,15 @@ function finishAttempt() {
   attemptState = AttemptState.FINISHED
   attemptFinishTime = attemptTimer
   attemptResult = 'WIN'
-  resultMessage = `🏆 FINISHED! Time: ${attemptTimer.toFixed(2)}s`
+  resultMessage = `🏆 FINISHED! Waiting for server...`
   resultTimestamp = Date.now()
 
-  // Update personal best
-  if (attemptFinishTime < bestAttemptTime || bestAttemptTime === 0) {
-    bestAttemptTime = attemptFinishTime
-  }
+  // Update personal best height (time will come from server)
   if (playerMaxHeight > bestAttemptHeight) {
     bestAttemptHeight = playerMaxHeight
   }
 
-  // Send to server (server calculates authoritative time)
+  // Send to server (server calculates authoritative time and broadcasts it back)
   sendPlayerFinished()
 }
 
@@ -263,6 +279,17 @@ export async function main() {
   // ============================================
 
   setupClient()
+
+  // Set up callback for when players finish - update our best time if it's us
+  onPlayerFinished((displayName, time, _finishOrder) => {
+    if (localPlayerName && displayName === localPlayerName) {
+      console.log(`[Game] Our finish confirmed by server: ${time.toFixed(2)}s`)
+      updateBestTime(time)
+      // Update result message with server-authoritative time
+      resultMessage = `🏆 FINISHED! Time: ${time.toFixed(2)}s`
+      resultTimestamp = Date.now()
+    }
+  })
 
   // ============================================
   // TRIGGER SETUP

@@ -201,7 +201,8 @@ function setupMessageHandlers(gameState: GameState) {
     room.send('playerFinishedBroadcast', {
       displayName: player.displayName,
       finishOrder: player.finishOrder,
-      speedMultiplier: gameState.getSpeedMultiplier()
+      speedMultiplier: gameState.getSpeedMultiplier(),
+      time: serverTime
     })
   })
 

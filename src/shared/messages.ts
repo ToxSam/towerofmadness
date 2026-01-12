@@ -17,7 +17,8 @@ export const Messages = {
   playerFinishedBroadcast: Schemas.Map({
     displayName: Schemas.String,
     finishOrder: Schemas.Number,
-    speedMultiplier: Schemas.Number
+    speedMultiplier: Schemas.Number,
+    time: Schemas.Number // Server-calculated finish time
   }),
 
   // Client -> Server: Time sync request (NTP-style)
