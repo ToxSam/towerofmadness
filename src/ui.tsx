@@ -1,5 +1,14 @@
 import ReactEcs, { UiEntity, ReactEcsRenderer } from "@dcl/sdk/react-ecs"
 import { Color4 } from "@dcl/sdk/math"
+import { engine, UiCanvasInformation } from "@dcl/sdk/ecs"
+
+// UI Scaling based on screen resolution (reference: 1920x1080)
+function getScaleUIFactor(): number {
+  const uiCanvasInfo = UiCanvasInformation.getOrNull(engine.RootEntity)
+  if (!uiCanvasInfo) return 1
+
+  return Math.min(uiCanvasInfo.width / 1920, uiCanvasInfo.height / 1080)
+}
 import {
   playerHeight,
   playerMaxHeight,
@@ -37,24 +46,24 @@ const CHUNK_COLORS: Record<string, Color4> = {
 
 // Tower Progress Bar Component
 const TowerProgressBar = () => {
+  const s = getScaleUIFactor()
+
   if (!towerConfig || towerConfig.chunkIds.length === 0) {
     return null
   }
 
-  const BAR_HEIGHT = 400
-  const BAR_WIDTH = 20
-  const PLAYER_BAR_WIDTH = 80
+  const BAR_HEIGHT = 400 * s
+  const BAR_WIDTH = 20 * s
+  const PLAYER_BAR_WIDTH = 80 * s
 
   const chunkIds = towerConfig.chunkIds
   const totalHeight = towerConfig.totalHeight
-  const chunkHeight = towerConfig.chunkHeight
 
   // Calculate segment height for each chunk
   const segmentHeight = BAR_HEIGHT / chunkIds.length
 
   // Calculate player position as percentage of tower
   const getPlayerYPosition = (height: number): number => {
-    // Clamp between 0 and totalHeight
     const clampedHeight = Math.max(0, Math.min(height, totalHeight))
     return (clampedHeight / totalHeight) * BAR_HEIGHT
   }
@@ -63,9 +72,9 @@ const TowerProgressBar = () => {
     <UiEntity
       uiTransform={{
         width: BAR_WIDTH,
-        height: BAR_HEIGHT + 40,
+        height: BAR_HEIGHT + 40 * s,
         positionType: 'absolute',
-        position: { left: '65px', bottom: '75px' },
+        position: { left: 120 * s, bottom: 120 * s },
         flexDirection: 'row',
         alignItems: 'flex-end'
       }}
@@ -82,7 +91,7 @@ const TowerProgressBar = () => {
           color: Color4.create(0.1, 0.1, 0.1, 0.9)
         }}
       >
-        {/* Chunk segments - reversed so first chunk (bottom of tower) renders last (bottom of bar) */}
+        {/* Chunk segments */}
         {[...chunkIds].reverse().map((chunkId, index) => {
           const color = CHUNK_COLORS[chunkId] || Color4.Gray()
           return (
@@ -100,7 +109,7 @@ const TowerProgressBar = () => {
         })}
       </UiEntity>
 
-      {/* Player indicators area - to the right of bar */}
+      {/* Player indicators area */}
       <UiEntity
         uiTransform={{
           width: PLAYER_BAR_WIDTH,
@@ -112,15 +121,15 @@ const TowerProgressBar = () => {
         <UiEntity
           uiTransform={{
             width: PLAYER_BAR_WIDTH,
-            height: 20,
+            height: 20 * s,
             positionType: 'absolute',
-            position: { bottom: `${getPlayerYPosition(playerHeight)}px`, left: '5px' }
+            position: { bottom: getPlayerYPosition(playerHeight), left: 5 * s }
           }}
         >
           <UiEntity
             uiTransform={{
-              width: PLAYER_BAR_WIDTH - 5,
-              height: 18,
+              width: PLAYER_BAR_WIDTH - 5 * s,
+              height: 18 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
@@ -129,14 +138,14 @@ const TowerProgressBar = () => {
             }}
             uiText={{
               value: 'YOU',
-              fontSize: 10,
+              fontSize: 10 * s,
               color: Color4.White(),
               textAlign: 'middle-center'
             }}
           />
         </UiEntity>
 
-        {/* Other players from local avatar data (exclude self) */}
+        {/* Other players */}
         {getLocalPlayerHeights(true).slice(0, 10).map((player, index) => {
           const yPos = getPlayerYPosition(player.height)
           const name = player.displayName.length > 6
@@ -148,15 +157,15 @@ const TowerProgressBar = () => {
               key={`player-${index}`}
               uiTransform={{
                 width: PLAYER_BAR_WIDTH,
-                height: 16,
+                height: 16 * s,
                 positionType: 'absolute',
-                position: { bottom: `${yPos}px`, left: '5px' }
+                position: { bottom: yPos, left: 5 * s }
               }}
             >
               <UiEntity
                 uiTransform={{
-                  width: PLAYER_BAR_WIDTH - 5,
-                  height: 14,
+                  width: PLAYER_BAR_WIDTH - 5 * s,
+                  height: 14 * s,
                   alignItems: 'center',
                   justifyContent: 'center'
                 }}
@@ -165,7 +174,7 @@ const TowerProgressBar = () => {
                 }}
                 uiText={{
                   value: name,
-                  fontSize: 9,
+                  fontSize: 9 * s,
                   color: Color4.White(),
                   textAlign: 'middle-center'
                 }}
@@ -179,6 +188,8 @@ const TowerProgressBar = () => {
 }
 
 const GameUI = () => {
+  const s = getScaleUIFactor()
+
   // Format time with milliseconds
   const formatTimeMs = (seconds: number): string => {
     const mins = Math.floor(seconds / 60)
@@ -199,9 +210,9 @@ const GameUI = () => {
 
   // Timer color based on time remaining
   const getTimerColor = () => {
-    if (roundTimer <= 30) return Color4.create(1, 0.2, 0.2, 1) // Red when < 30s
-    if (roundTimer <= 60) return Color4.create(1, 0.8, 0, 1)   // Orange when < 1 min
-    return Color4.create(0.3, 1, 0.3, 1) // Green otherwise
+    if (roundTimer <= 30) return Color4.create(1, 0.2, 0.2, 1)
+    if (roundTimer <= 60) return Color4.create(1, 0.8, 0, 1)
+    return Color4.create(0.3, 1, 0.3, 1)
   }
 
   // Show loading screen while connecting
@@ -223,8 +234,8 @@ const GameUI = () => {
       >
         <UiEntity
           uiTransform={{
-            width: 400,
-            height: 150,
+            width: 400 * s,
+            height: 150 * s,
             alignItems: 'center',
             justifyContent: 'center',
             flexDirection: 'column'
@@ -236,13 +247,13 @@ const GameUI = () => {
           <UiEntity
             uiTransform={{
               width: '100%',
-              height: 50,
+              height: 50 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
             uiText={{
               value: 'TOWER OF MADNESS',
-              fontSize: 32,
+              fontSize: 32 * s,
               color: Color4.Yellow(),
               textAlign: 'middle-center'
             }}
@@ -250,13 +261,13 @@ const GameUI = () => {
           <UiEntity
             uiTransform={{
               width: '100%',
-              height: 40,
+              height: 40 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
             uiText={{
               value: statusText,
-              fontSize: 20,
+              fontSize: 20 * s,
               color: Color4.White(),
               textAlign: 'middle-center'
             }}
@@ -278,17 +289,17 @@ const GameUI = () => {
       <UiEntity
         uiTransform={{
           width: '100%',
-          height: 100,
+          height: 100 * s,
           positionType: 'absolute',
-          position: { top: '15px', left: '0px' },
+          position: { top: 15 * s, left: 0 },
           alignItems: 'center',
           justifyContent: 'center'
         }}
       >
         <UiEntity
           uiTransform={{
-            width: 280,
-            height: 90,
+            width: 280 * s,
+            height: 90 * s,
             alignItems: 'center',
             justifyContent: 'center',
             flexDirection: 'column'
@@ -303,13 +314,13 @@ const GameUI = () => {
           <UiEntity
             uiTransform={{
               width: '100%',
-              height: 55,
+              height: 55 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
             uiText={{
               value: `${formatTime(roundTimer)}`,
-              fontSize: 42,
+              fontSize: 42 * s,
               color: getTimerColor(),
               textAlign: 'middle-center'
             }}
@@ -320,13 +331,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 25,
+                height: 25 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: `x${roundSpeedMultiplier.toFixed(0)} SPEED!`,
-                fontSize: 18,
+                fontSize: 18 * s,
                 color: Color4.Yellow(),
                 textAlign: 'middle-center'
               }}
@@ -338,13 +349,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 25,
+                height: 25 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: roundPhase === RoundPhase.ENDING ? 'ROUND ENDED' : 'NEXT ROUND SOON',
-                fontSize: 14,
+                fontSize: 14 * s,
                 color: Color4.White(),
                 textAlign: 'middle-center'
               }}
@@ -357,17 +368,17 @@ const GameUI = () => {
       <UiEntity
         uiTransform={{
           width: '100%',
-          height: 120,
+          height: 120 * s,
           positionType: 'absolute',
-          position: { top: '115px', left: '0px' },
+          position: { top: 115 * s, left: 0 },
           alignItems: 'center',
           justifyContent: 'center'
         }}
       >
         <UiEntity
           uiTransform={{
-            width: 260,
-            height: isAttemptActive ? 110 : 70,
+            width: 260 * s,
+            height: isAttemptActive ? 110 * s : 70 * s,
             alignItems: 'center',
             justifyContent: 'center',
             flexDirection: 'column'
@@ -380,13 +391,13 @@ const GameUI = () => {
           <UiEntity
             uiTransform={{
               width: '100%',
-              height: 35,
+              height: 35 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
             uiText={{
               value: `Height: ${playerHeight.toFixed(1)}m`,
-              fontSize: 22,
+              fontSize: 22 * s,
               color: Color4.White(),
               textAlign: 'middle-center'
             }}
@@ -397,13 +408,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 35,
+                height: 35 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: `Attempt: ${formatTimeMs(attemptTimer)}`,
-                fontSize: 20,
+                fontSize: 20 * s,
                 color: Color4.create(0.5, 0.8, 1, 1),
                 textAlign: 'middle-center'
               }}
@@ -415,13 +426,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 30,
+                height: 30 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: `Max: ${playerMaxHeight.toFixed(1)}m`,
-                fontSize: 16,
+                fontSize: 16 * s,
                 color: Color4.Yellow(),
                 textAlign: 'middle-center'
               }}
@@ -433,10 +444,10 @@ const GameUI = () => {
       {/* PERSONAL BEST - Top Right */}
       <UiEntity
         uiTransform={{
-          width: 220,
-          height: 100,
+          width: 220 * s,
+          height: 100 * s,
           positionType: 'absolute',
-          position: { top: '15px', right: '15px' },
+          position: { top: 15 * s, right: 15 * s },
           alignItems: 'center',
           justifyContent: 'center',
           flexDirection: 'column'
@@ -448,13 +459,13 @@ const GameUI = () => {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 30,
+            height: 30 * s,
             alignItems: 'center',
             justifyContent: 'center'
           }}
           uiText={{
             value: 'PERSONAL BEST',
-            fontSize: 14,
+            fontSize: 14 * s,
             color: Color4.Yellow(),
             textAlign: 'middle-center'
           }}
@@ -462,13 +473,13 @@ const GameUI = () => {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 30,
+            height: 30 * s,
             alignItems: 'center',
             justifyContent: 'center'
           }}
           uiText={{
             value: `Time: ${bestAttemptTime > 0 ? formatTimeMs(bestAttemptTime) : '--:--.--'}`,
-            fontSize: 16,
+            fontSize: 16 * s,
             color: Color4.White(),
             textAlign: 'middle-center'
           }}
@@ -476,13 +487,13 @@ const GameUI = () => {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 30,
+            height: 30 * s,
             alignItems: 'center',
             justifyContent: 'center'
           }}
           uiText={{
             value: `Height: ${bestAttemptHeight > 0 ? bestAttemptHeight.toFixed(1) + 'm' : '--'}`,
-            fontSize: 16,
+            fontSize: 16 * s,
             color: Color4.White(),
             textAlign: 'middle-center'
           }}
@@ -493,10 +504,10 @@ const GameUI = () => {
       {leaderboard.length > 0 && (
         <UiEntity
           uiTransform={{
-            width: 230,
-            height: Math.min(350, 45 + leaderboard.length * 28),
+            width: 230 * s,
+            height: Math.min(350 * s, (45 + leaderboard.length * 28) * s),
             positionType: 'absolute',
-            position: { top: '15px', left: '15px' },
+            position: { top: '35%', left: 120 * s },
             alignItems: 'flex-start',
             justifyContent: 'flex-start',
             flexDirection: 'column'
@@ -508,13 +519,13 @@ const GameUI = () => {
           <UiEntity
             uiTransform={{
               width: '100%',
-              height: 35,
+              height: 35 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
             uiText={{
               value: `LEADERBOARD`,
-              fontSize: 16,
+              fontSize: 16 * s,
               color: Color4.Yellow(),
               textAlign: 'middle-center'
             }}
@@ -532,14 +543,14 @@ const GameUI = () => {
                 key={`lb-${index}`}
                 uiTransform={{
                   width: '100%',
-                  height: 26,
+                  height: 26 * s,
                   alignItems: 'center',
                   justifyContent: 'flex-start',
-                  margin: { left: 8 }
+                  margin: { left: 8 * s }
                 }}
                 uiText={{
                   value: `${medal} ${name} ${status} ${player.maxHeight.toFixed(0)}m`,
-                  fontSize: 13,
+                  fontSize: 13 * s,
                   color: player.isFinished ? Color4.Green() : Color4.White(),
                   textAlign: 'middle-left'
                 }}
@@ -556,15 +567,15 @@ const GameUI = () => {
             width: '100%',
             height: '100%',
             positionType: 'absolute',
-            position: { top: '0px', left: '0px' },
+            position: { top: 0, left: 0 },
             alignItems: 'center',
             justifyContent: 'center'
           }}
         >
           <UiEntity
             uiTransform={{
-              width: 400,
-              height: 60 + roundWinners.length * 45 + 50,
+              width: 400 * s,
+              height: (60 + roundWinners.length * 45 + 50) * s,
               alignItems: 'center',
               justifyContent: 'flex-start',
               flexDirection: 'column'
@@ -576,13 +587,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 50,
+                height: 50 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: 'ROUND COMPLETE!',
-                fontSize: 32,
+                fontSize: 32 * s,
                 color: Color4.Yellow(),
                 textAlign: 'middle-center'
               }}
@@ -599,13 +610,13 @@ const GameUI = () => {
                   key={`winner-${i}`}
                   uiTransform={{
                     width: '100%',
-                    height: 40,
+                    height: 40 * s,
                     alignItems: 'center',
                     justifyContent: 'center'
                   }}
                   uiText={{
                     value: `${medal} ${winner.displayName} - ${display}`,
-                    fontSize: 22,
+                    fontSize: 22 * s,
                     color: i === 0 ? Color4.create(1, 0.84, 0, 1) : Color4.White(),
                     textAlign: 'middle-center'
                   }}
@@ -616,14 +627,14 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 40,
+                height: 40 * s,
                 alignItems: 'center',
                 justifyContent: 'center',
-                margin: { top: 10 }
+                margin: { top: 10 * s }
               }}
               uiText={{
                 value: 'Next round starting soon...',
-                fontSize: 16,
+                fontSize: 16 * s,
                 color: Color4.create(0.6, 0.6, 0.6, 1),
                 textAlign: 'middle-center'
               }}
@@ -639,15 +650,15 @@ const GameUI = () => {
             width: '100%',
             height: '100%',
             positionType: 'absolute',
-            position: { top: '0px', left: '0px' },
+            position: { top: 0, left: 0 },
             alignItems: 'center',
             justifyContent: 'center'
           }}
         >
           <UiEntity
             uiTransform={{
-              width: attemptResult === 'DEATH' ? 500 : 400,
-              height: attemptResult === 'DEATH' ? 180 : 120,
+              width: (attemptResult === 'DEATH' ? 500 : 400) * s,
+              height: (attemptResult === 'DEATH' ? 180 : 120) * s,
               alignItems: 'center',
               justifyContent: 'center',
               flexDirection: 'column'
@@ -661,13 +672,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 60,
+                height: 60 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: attemptResult === 'WIN' ? 'FINISHED!' : 'DEATH!',
-                fontSize: 40,
+                fontSize: 40 * s,
                 color: Color4.White(),
                 textAlign: 'middle-center'
               }}
@@ -675,13 +686,13 @@ const GameUI = () => {
             <UiEntity
               uiTransform={{
                 width: '100%',
-                height: 40,
+                height: 40 * s,
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
               uiText={{
                 value: resultMessage,
-                fontSize: 18,
+                fontSize: 18 * s,
                 color: Color4.White(),
                 textAlign: 'middle-center'
               }}
@@ -690,13 +701,13 @@ const GameUI = () => {
               <UiEntity
                 uiTransform={{
                   width: '100%',
-                  height: 35,
+                  height: 35 * s,
                   alignItems: 'center',
                   justifyContent: 'center'
                 }}
                 uiText={{
                   value: 'Go to TriggerStart to retry!',
-                  fontSize: 16,
+                  fontSize: 16 * s,
                   color: Color4.Yellow(),
                   textAlign: 'middle-center'
                 }}
@@ -711,17 +722,17 @@ const GameUI = () => {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 60,
+            height: 60 * s,
             positionType: 'absolute',
-            position: { bottom: '40px', left: '0px' },
+            position: { bottom: 40 * s, left: 0 },
             alignItems: 'center',
             justifyContent: 'center'
           }}
         >
           <UiEntity
             uiTransform={{
-              width: 380,
-              height: 50,
+              width: 380 * s,
+              height: 50 * s,
               alignItems: 'center',
               justifyContent: 'center'
             }}
@@ -738,7 +749,7 @@ const GameUI = () => {
               }}
               uiText={{
                 value: 'Go to TriggerStart to begin your attempt!',
-                fontSize: 18,
+                fontSize: 18 * s,
                 color: Color4.White(),
                 textAlign: 'middle-center'
               }}
@@ -753,10 +764,10 @@ const GameUI = () => {
       {/* NTP Time Sync Debug - Bottom Left */}
       <UiEntity
         uiTransform={{
-          width: 200,
-          height: 50,
+          width: 200 * s,
+          height: 50 * s,
           positionType: 'absolute',
-          position: { bottom: '15px', left: '15px' },
+          position: { bottom: 15 * s, left: 120 * s },
           alignItems: 'flex-start',
           justifyContent: 'center',
           flexDirection: 'column'
@@ -768,13 +779,13 @@ const GameUI = () => {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 20,
+            height: 20 * s,
             alignItems: 'center',
             justifyContent: 'center'
           }}
           uiText={{
             value: 'NTP SYNC',
-            fontSize: 10,
+            fontSize: 10 * s,
             color: Color4.create(0.6, 0.6, 0.8, 1),
             textAlign: 'middle-center'
           }}
@@ -782,7 +793,7 @@ const GameUI = () => {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 25,
+            height: 25 * s,
             alignItems: 'center',
             justifyContent: 'center'
           }}
@@ -790,7 +801,7 @@ const GameUI = () => {
             value: isTimeSyncReady()
               ? `Offset: ${getTimeSyncOffset().toFixed(0)}ms`
               : 'Syncing...',
-            fontSize: 14,
+            fontSize: 14 * s,
             color: isTimeSyncReady()
               ? (Math.abs(getTimeSyncOffset()) > 5000 ? Color4.Red() : Color4.Green())
               : Color4.Yellow(),
@@ -802,10 +813,10 @@ const GameUI = () => {
       {/* Multiplayer Indicator - Bottom Right */}
       <UiEntity
         uiTransform={{
-          width: 140,
-          height: 30,
+          width: 140 * s,
+          height: 30 * s,
           positionType: 'absolute',
-          position: { bottom: '15px', right: '15px' },
+          position: { bottom: 15 * s, right: 15 * s },
           alignItems: 'center',
           justifyContent: 'center'
         }}
@@ -822,7 +833,7 @@ const GameUI = () => {
           }}
           uiText={{
             value: 'MULTIPLAYER',
-            fontSize: 14,
+            fontSize: 14 * s,
             color: Color4.White(),
             textAlign: 'middle-center'
           }}

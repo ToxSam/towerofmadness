@@ -1,4 +1,4 @@
-import { engine, Entity, Transform, GltfContainer } from '@dcl/sdk/ecs'
+import { engine, Entity, Transform, GltfContainer, VisibilityComponent } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
 import { syncEntity } from '@dcl/sdk/network'
 import { AUTH_SERVER_PEER_ID } from '@dcl/sdk/network/message-bus-sync'
@@ -53,6 +53,7 @@ export class GameState {
 
   // Tower entities (synced to clients)
   private towerEntities: Entity[] = []
+  private towerEntityPool: Entity[] = []
 
   // Server-only state
   private players = new Map<string, PlayerData>()
@@ -107,6 +108,20 @@ export class GameState {
     })
     syncEntity(this.towerConfigEntity, [TowerConfigComponent.componentId])
 
+    // Create entity pool for tower chunks (MAX_CHUNKS + 1 for ChunkEnd)
+    for (let i = 0; i < MAX_CHUNKS + 1; i++) {
+      const entity = engine.addEntity()
+      Transform.create(entity, {
+        position: Vector3.create(TOWER_X, 0, TOWER_Z),
+        scale: Vector3.One()
+      })
+      GltfContainer.create(entity, { src: '' })
+      VisibilityComponent.create(entity, { visible: false })
+      protectServerEntity(entity, [Transform, GltfContainer, VisibilityComponent])
+      syncEntity(entity, [Transform.componentId, GltfContainer.componentId, VisibilityComponent.componentId])
+      this.towerEntityPool.push(entity)
+    }
+
     console.log('[Server] Game state initialized')
   }
 
@@ -122,50 +137,53 @@ export class GameState {
 
   // Tower management
   private destroyTower() {
-    for (const entity of this.towerEntities) {
-      engine.removeEntity(entity)
+    // Hide all pooled entities using VisibilityComponent
+    for (const entity of this.towerEntityPool) {
+      VisibilityComponent.getMutable(entity).visible = false
     }
     this.towerEntities = []
-    console.log('[Server] Tower destroyed')
+    console.log('[Server] Tower hidden')
   }
 
   private createTower(chunkIds: string[]) {
-    // Create middle chunks
+    this.towerEntities = []
+
+    // Configure middle chunks from pool
     for (let i = 0; i < chunkIds.length; i++) {
+      const entity = this.towerEntityPool[i]
       const yPosition = CHUNK_HEIGHT * (i + 1)
       const rotationY = i % 2 === 0 ? 180 : 0
 
-      const entity = engine.addEntity()
-      Transform.create(entity, {
-        position: Vector3.create(TOWER_X, yPosition, TOWER_Z),
-        rotation: Quaternion.fromEulerDegrees(0, rotationY, 0),
-        scale: Vector3.One()
-      })
-      GltfContainer.create(entity, {
-        src: `assets/chunks/${chunkIds[i]}.glb`
-      })
-      protectServerEntity(entity, [Transform, GltfContainer])
-      syncEntity(entity, [Transform.componentId, GltfContainer.componentId])
+      const transform = Transform.getMutable(entity)
+      transform.position = Vector3.create(TOWER_X, yPosition, TOWER_Z)
+      transform.rotation = Quaternion.fromEulerDegrees(0, rotationY, 0)
+      transform.scale = Vector3.One()
+
+      GltfContainer.getMutable(entity).src = `assets/chunks/${chunkIds[i]}.glb`
+      VisibilityComponent.getMutable(entity).visible = true
+
       this.towerEntities.push(entity)
     }
 
-    // Create ChunkEnd at the top
+    // Configure ChunkEnd from pool
+    const endEntity = this.towerEntityPool[chunkIds.length]
     const endY = CHUNK_HEIGHT * (chunkIds.length + 1)
-    const lastIndex = chunkIds.length - 1
-    const endRotationY = lastIndex % 2 === 0 ? 180 : 0
+    const endRotationY = (chunkIds.length - 1) % 2 === 0 ? 180 : 0
 
-    const endEntity = engine.addEntity()
-    Transform.create(endEntity, {
-      position: Vector3.create(TOWER_X, endY, TOWER_Z),
-      rotation: Quaternion.fromEulerDegrees(0, endRotationY, 0),
-      scale: Vector3.One()
-    })
-    GltfContainer.create(endEntity, {
-      src: 'assets/chunks/ChunkEnd.glb'
-    })
-    protectServerEntity(endEntity, [Transform, GltfContainer])
-    syncEntity(endEntity, [Transform.componentId, GltfContainer.componentId])
+    const endTransform = Transform.getMutable(endEntity)
+    endTransform.position = Vector3.create(TOWER_X, endY, TOWER_Z)
+    endTransform.rotation = Quaternion.fromEulerDegrees(0, endRotationY, 0)
+    endTransform.scale = Vector3.One()
+
+    GltfContainer.getMutable(endEntity).src = 'assets/chunks/ChunkEnd.glb'
+    VisibilityComponent.getMutable(endEntity).visible = true
+
     this.towerEntities.push(endEntity)
+
+    // Hide unused pool entities (if fewer chunks this round)
+    for (let i = chunkIds.length + 1; i < this.towerEntityPool.length; i++) {
+      VisibilityComponent.getMutable(this.towerEntityPool[i]).visible = false
+    }
 
     // Update tower config for UI (include ChunkStart at the beginning)
     const allChunks = ['ChunkStart', ...chunkIds, 'ChunkEnd']
